@@ -2,9 +2,72 @@ import { showResults, ITEMS_PER_PAGE } from '../utils/index'
 
 const scrapeButtonElement = document.getElementById('scrapeButton') as HTMLButtonElement | null
 const clearButtonElement = document.getElementById('clearButton') as HTMLButtonElement | null
+const keywordInputElement = document.getElementById('keywordInput') as HTMLInputElement | null
+const addKeywordButtonElement = document.getElementById('addKeywordBtn') as HTMLButtonElement | null
+const keywordListElement = document.getElementById('keywordList') as HTMLDivElement | null
+
+const KEYWORDS_STORAGE_KEY = 'keywords'
+let keywords: string[] = []
 
 let todosLosProductos: any[] = []
 let paginaActual: number = 1
+
+function normalizeKeyword(value: string) {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+async function loadKeywords() {
+  const result = await chrome.storage.local.get(KEYWORDS_STORAGE_KEY)
+  const stored = result?.[KEYWORDS_STORAGE_KEY]
+  keywords = Array.isArray(stored) ? stored : []
+  renderKeywords()
+}
+
+async function saveKeywords() {
+  await chrome.storage.local.set({ [KEYWORDS_STORAGE_KEY]: keywords })
+}
+
+function renderKeywords() {
+  if (!keywordListElement) return
+
+  if (keywords.length === 0) {
+    keywordListElement.innerHTML = '<div class="text-xs text-gray-500">No hay keywords guardadas.</div>'
+    return
+  }
+
+  keywordListElement.innerHTML = keywords
+    .map((keyword) => {
+      const safe = escapeHtml(keyword)
+      return `
+        <div class="flex items-center justify-between gap-2 p-2 border border-gray-100 rounded">
+          <div class="text-sm text-gray-800 truncate">${safe}</div>
+          <div class="flex items-center gap-1">
+            <button data-action="falabella" data-keyword="${safe}" class="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200">Falabella</button>
+            <button data-action="mercadolibre" data-keyword="${safe}" class="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200">MercadoLibre</button>
+            <button data-action="delete" data-keyword="${safe}" class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded hover:bg-red-100">Eliminar</button>
+          </div>
+        </div>
+      `
+    })
+    .join('')
+}
+
+function buildFalabellaUrl(keyword: string) {
+  return `https://www.falabella.com.pe/falabella-pe/search?Ntt=${encodeURIComponent(keyword)}`
+}
+
+function buildMercadoLibreUrl(keyword: string) {
+  return `https://listado.mercadolibre.com.pe/${encodeURIComponent(keyword)}`
+}
 
 function actualizarVista() {
   const resultEl = document.getElementById('result')
@@ -39,6 +102,44 @@ async function tryInjectContentScript(tabId: number, url: string) {
 }
 
 async function init() {
+  await loadKeywords()
+
+  addKeywordButtonElement?.addEventListener('click', async () => {
+    const value = normalizeKeyword(keywordInputElement?.value || '')
+    if (!value) return
+    const exists = keywords.some(k => k.toLowerCase() === value.toLowerCase())
+    if (exists) return
+    keywords = [value, ...keywords]
+    if (keywordInputElement) keywordInputElement.value = ''
+    renderKeywords()
+    await saveKeywords()
+  })
+
+  keywordInputElement?.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    addKeywordButtonElement?.click()
+  })
+
+  keywordListElement?.addEventListener('click', async (event) => {
+    const target = event.target as HTMLElement
+    const button = target.closest('button[data-action]') as HTMLButtonElement | null
+    if (!button) return
+    const action = button.dataset.action
+    const keyword = button.dataset.keyword ? normalizeKeyword(button.dataset.keyword) : ''
+    if (!action || !keyword) return
+
+    if (action === 'delete') {
+      keywords = keywords.filter(k => k.toLowerCase() !== keyword.toLowerCase())
+      renderKeywords()
+      await saveKeywords()
+      return
+    }
+
+    const url = action === 'falabella' ? buildFalabellaUrl(keyword) : buildMercadoLibreUrl(keyword)
+    chrome.tabs.create({ url })
+  })
+
   // Wire up click handlers
   scrapeButtonElement?.addEventListener('click', async () =>  {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
