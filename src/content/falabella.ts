@@ -2,6 +2,13 @@
 
 console.log('Falabella content script injected')
 
+const parsePriceNumber = (value?: string) => {
+  if (!value) return null
+  const cleaned = value.replace(/[^0-9.,]/g, '').replace(/,/g, '')
+  const numeric = Number.parseFloat(cleaned)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
 const scrapearProductosFalabella = () => {
   const nodeList = document.querySelectorAll('[data-testid=ssr-pod]')
   
@@ -12,11 +19,26 @@ const scrapearProductosFalabella = () => {
   
   console.log(`Falabella: Encontrados ${nodeList.length} productos`)
   
+  const keyword = document.querySelector('h1')?.textContent?.trim() || 'falabella'
+  const timestamp = Date.now()
   const datos = Array.from(nodeList)
-  const productos = datos.map((producto: Element) => {
+  const productos = datos.map((producto: Element, index: number) => {
     const text = (producto as HTMLElement).innerText || ''
     const [marca, nombreArticulo, quienComercializa, precioArticulo, descuento] = text.split('\n')
-    return { marca, nombreArticulo, quienComercializa, precioArticulo, descuento }
+    const url = (producto as HTMLElement).querySelector('a')?.getAttribute('href') || window.location.href
+    const precioNumerico = parsePriceNumber(precioArticulo)
+    return {
+      site: 'falabella',
+      keyword,
+      timestamp,
+      posicion: index + 1,
+      titulo: nombreArticulo || marca || 'Sin titulo',
+      precioVisible: precioArticulo || null,
+      precioNumerico,
+      url,
+      marca: marca || null,
+      vendedor: quienComercializa || null
+    }
   })
   
   console.log(`Falabella: Procesados ${productos.length} productos`)

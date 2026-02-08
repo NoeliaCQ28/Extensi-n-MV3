@@ -1,5 +1,18 @@
 export const ITEMS_PER_PAGE = 10
 
+export interface Producto {
+  site: string
+  keyword: string
+  timestamp: number
+  posicion: number
+  titulo: string
+  precioVisible?: string | null
+  precioNumerico?: number | null
+  url: string
+  marca?: string | null
+  vendedor?: string | null
+}
+
 export function escapeHtml(str?: string) {
   if (!str) return ''
   return String(str)
@@ -10,7 +23,7 @@ export function escapeHtml(str?: string) {
     .replace(/'/g, '&#39;')
 }
 
-export function buildFormHtml(products: any[], paginaActual: number = 1) {
+export function buildFormHtml(products: Producto[], paginaActual: number = 1) {
   if (!products || products.length === 0) {
     return `<div class="p-4 bg-white rounded shadow text-gray-600">No se encontraron productos.</div>`
   }
@@ -24,13 +37,13 @@ export function buildFormHtml(products: any[], paginaActual: number = 1) {
     .map(
       (p, i) => {
         const indiceReal = inicio + i
-        return `\n          <label class="flex items-start gap-3 p-3 bg-white rounded shadow-sm hover:bg-gray-50">\n            <input type="checkbox" name="selected" value="${indiceReal}" class="mt-1 h-4 w-4 text-indigo-600 border-gray-300 rounded" />\n            <div class="flex-1">\n              <div class="font-semibold text-sm text-gray-800">${escapeHtml(p.nombreArticulo) || '—'}</div>\n              <div class="text-xs text-gray-500">${escapeHtml(p.marca || p.quienComercializa) || 'Sin marca'} • ${escapeHtml(p.precioArticulo) || 'Sin precio'}</div>\n              ${p.descuento ? `<div class="text-xs text-green-600 font-medium">${escapeHtml(p.descuento)}</div>` : ''}\n            </div>\n          </label>`
+        return `\n          <label class="flex items-start gap-3 p-3 bg-white rounded shadow-sm hover:bg-gray-50">\n            <input type="checkbox" name="selected" value="${indiceReal}" class="mt-1 h-4 w-4 text-indigo-600 border-gray-300 rounded" />\n            <div class="flex-1">\n              <div class="font-semibold text-sm text-gray-800">${escapeHtml(p.titulo) || '—'}</div>\n              <div class="text-xs text-gray-500">${escapeHtml(p.marca || p.vendedor || 'Sin marca')} • ${escapeHtml(p.precioVisible || 'Sin precio')}</div>\n            </div>\n          </label>`
       }
     )
     .join('')}\n      </div>\n\n      <div class="flex gap-2">\n        <button type="button" id="exportBtn" class="flex-1 px-3 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">Exportar CSV</button>\n        <button type="button" id="copyBtn" class="px-3 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200">Copiar JSON</button>\n      </div>\n    </form>\n    `
 }
 
-export async function showResults(resultEl: HTMLElement | null, products: any[], paginaActual: number = 1) {
+export async function showResults(resultEl: HTMLElement | null, products: Producto[], paginaActual: number = 1) {
   
   if (resultEl) resultEl.innerHTML = buildFormHtml(products, paginaActual)
 
@@ -42,8 +55,19 @@ export async function showResults(resultEl: HTMLElement | null, products: any[],
     exportBtn.addEventListener('click', () => {
       const checked = Array.from(document.querySelectorAll('input[name=selected]:checked')).map(el => products[Number((el as HTMLInputElement).value)])
       const rows = checked.length ? checked : products
-      const csv = rows.map(r => [r.marca, r.nombreArticulo, r.quienComercializa, r.precioArticulo, r.descuento].map(v => '"' + String(v || '').replace(/"/g, '""') + '"').join(',')).join('\n')
-      const csvContent = 'Marca,Nombre,Comercializa,Precio,Descuento\n' + csv
+      const csv = rows.map(r => [
+        r.site,
+        r.keyword,
+        r.timestamp,
+        r.posicion,
+        r.titulo,
+        r.precioVisible,
+        r.precioNumerico,
+        r.url,
+        r.marca,
+        r.vendedor
+      ].map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(',')).join('\n')
+      const csvContent = 'Site,Keyword,Timestamp,Posicion,Titulo,PrecioVisible,PrecioNumerico,Url,Marca,Vendedor\n' + csv
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')

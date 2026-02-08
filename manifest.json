@@ -3,7 +3,7 @@
   "name": "Scraping de Falabella y MercadoLibre",
   "version": "1.0",
   "description": "Extrae productos de Falabella y MercadoLibre con paginación",
-  "permissions": ["scripting", "activeTab"],
+  "permissions": ["scripting", "activeTab", "storage", "unlimitedStorage"],
   "host_permissions": ["http://localhost:3000/*"],
   "action": {
     "default_popup": "src/popup/popup.html"

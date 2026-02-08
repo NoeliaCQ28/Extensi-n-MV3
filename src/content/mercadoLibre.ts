@@ -3,11 +3,23 @@
 console.log('MercadoLibre content script injected')
 
 interface Producto {
-  marca?: string
-  nombreArticulo: string
-  precioArticulo: string
-  descuento?: string
-  quienComercializa?: string
+  site: string
+  keyword: string
+  timestamp: number
+  posicion: number
+  titulo: string
+  precioVisible?: string | null
+  precioNumerico?: number | null
+  url: string
+  marca?: string | null
+  vendedor?: string | null
+}
+
+const parsePriceNumber = (value?: string) => {
+  if (!value) return null
+  const cleaned = value.replace(/[^0-9.,]/g, '').replace(/,/g, '')
+  const numeric = Number.parseFloat(cleaned)
+  return Number.isFinite(numeric) ? numeric : null
 }
 
 const scrapearProductosMercadoLibre = (): Producto[] => {
@@ -33,8 +45,10 @@ const scrapearProductosMercadoLibre = (): Producto[] => {
     return []
   }
   
+  const keyword = (document.querySelector('#cb1-edit') as HTMLInputElement | null)?.value?.trim() || 'mercadolibre'
+  const timestamp = Date.now()
   const datos = Array.from(nodeList)
-  const productos = datos.map((producto: Element) => {
+  const productos = datos.map((producto: Element, index: number) => {
     try {
       // Extraer título - intentar múltiples selectores
       const tituloSelectors = [
@@ -102,18 +116,34 @@ const scrapearProductosMercadoLibre = (): Producto[] => {
         }
       }
 
+      const url = (producto as HTMLElement).querySelector('a')?.getAttribute('href') || window.location.href
+      const precioNumerico = parsePriceNumber(precioArticulo)
+
       return {
-        nombreArticulo,
-        precioArticulo,
-        descuento,
-        quienComercializa,
-        marca: undefined
+        site: 'mercadolibre',
+        keyword,
+        timestamp,
+        posicion: index + 1,
+        titulo: nombreArticulo,
+        precioVisible: precioArticulo || null,
+        precioNumerico,
+        url,
+        marca: null,
+        vendedor: quienComercializa || null
       }
     } catch (err) {
       console.error('Error al procesar producto individual:', err)
       return {
-        nombreArticulo: 'Error al procesar',
-        precioArticulo: 'N/A'
+        site: 'mercadolibre',
+        keyword,
+        timestamp,
+        posicion: index + 1,
+        titulo: 'Error al procesar',
+        precioVisible: null,
+        precioNumerico: null,
+        url: window.location.href,
+        marca: null,
+        vendedor: null
       }
     }
   })
@@ -149,7 +179,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Enviar datos al background
       try {
         chrome.runtime.sendMessage({ type: 'scrapedData', data: productos }, (resp) => {
-          // opcional: manejar respuesta
         })
       } catch (err) {
         console.warn('No se pudo enviar datos al background', err)
