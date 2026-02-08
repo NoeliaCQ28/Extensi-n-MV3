@@ -1,0 +1,61 @@
+/* Minimal utility CSS to approximate the Tailwind classes used in popup.html/popup.js
+   This is a small fallback so the popup looks good without loading remote scripts.
+   For full Tailwind, build a real `tailwind.css` via the Tailwind CLI and replace this file.
+*/
+:root{--gray-50:#F9FAFB;--gray-100:#F3F4F6;--gray-200:#E5E7EB;--gray-300:#D1D5DB;--gray-500:#6B7280;--gray-700:#374151;--gray-900:#111827;--indigo-600:#4F46E5}
+html,body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;}
+.w-\[360px\]{width:360px}
+.max-w-full{max-width:100%}
+.bg-white{background-color:#ffffff}
+.rounded-lg{border-radius:0.5rem}
+.rounded-md{border-radius:0.375rem}
+.rounded{border-radius:0.25rem}
+.shadow{box-shadow:0 1px 2px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.06)}
+.shadow-sm{box-shadow:0 1px 1px rgba(0,0,0,0.04)}
+.p-4{padding:1rem}
+.p-3{padding:0.75rem}
+.mb-4{margin-bottom:1rem}
+.mt-1{margin-top:0.25rem}
+.flex{display:flex}
+.items-start{align-items:flex-start}
+.items-center{align-items:center}
+.justify-between{justify-content:space-between}
+.gap-4{gap:1rem}
+.gap-2{gap:0.5rem}
+.min-w-0{min-width:0}
+.text-lg{font-size:1.125rem;line-height:1.75rem}
+.font-semibold{font-weight:600}
+.text-gray-900{color:var(--gray-900)}
+.text-gray-500{color:var(--gray-500)}
+.text-sm{font-size:0.875rem;line-height:1.25rem}
+.text-xs{font-size:0.75rem;line-height:1rem}
+.inline-flex{display:inline-flex}
+.items-start .text-sm{color:var(--gray-700)}
+.inline-flex.items-center{gap:0.5rem}
+.px-3{padding-left:0.75rem;padding-right:0.75rem}
+.py-2{padding-top:0.5rem;padding-bottom:0.5rem}
+.text-white{color:#fff}
+.bg-indigo-600{background-color:var(--indigo-600)}
+.hover\:bg-indigo-700:hover{background-color:#4338CA}
+.bg-gray-50{background-color:var(--gray-50)}
+.bg-gray-100{background-color:var(--gray-100)}
+.hover\:bg-gray-100:hover{background-color:var(--gray-100)}
+.text-gray-700{color:var(--gray-700)}
+.text-indigo-600{color:var(--indigo-600)}
+.rounded-md{border-radius:0.375rem}
+.min-h-\[120px\]{min-height:120px}
+.space-y-3 > * + *{margin-top:0.75rem}
+.max-h-48{max-height:12rem}
+.overflow-auto{overflow:auto}
+.hover\:bg-gray-50:hover{background-color:var(--gray-50)}
+.shadow-sm{box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+.h-4{height:1rem}
+.w-4{width:1rem}
+.text-center{text-align:center}
+.flex-1{flex:1 1 0%}
+.font-medium{font-weight:500}
+/* small form element tweaks */
+input[type=checkbox]{accent-color:var(--indigo-600)}
+#result{word-break:break-word}
+/* Buttons basic reset */
+button{border:0;cursor:pointer}

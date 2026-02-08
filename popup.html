@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scraping de Falabella</title>
+    <!-- Local Tailwind (use a built CSS file: tailwind.css) -->
+    <link rel="stylesheet" href="/tailwind.css">
+    <style>
+        /* Small popup-specific tweaks */
+        html, body { height: 100%; }
+        body { margin: 0.5rem; }
+    </style>
+</head>
+<body>
+    <div class="w-[360px] max-w-full">
+        <!-- Simple card heading (Tailwind UI Blocks - Simple) -->
+        <div class="bg-white rounded-lg shadow p-4 mb-4 flex items-start justify-between gap-4">
+            <div class="min-w-0">
+                <h1 class="text-lg font-semibold text-gray-900">Scraping de Falabella</h1>
+                <p class="mt-1 text-sm text-gray-500">Extrae información de productos y selecciona lo que quieras exportar.</p>
+            </div>
+            <div class="flex items-center gap-2">
+                <button id="clearButton" class="inline-flex items-center px-3 py-2 bg-gray-50 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-100">Limpiar</button>
+                <button id="scrapeButton" class="inline-flex items-center px-3 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700">Extraer</button>
+            </div>
+        </div>
+
+        <div id="result" class="min-h-[120px]"></div>
+    </div>
+    <script src="popup.js"></script>
+</body>

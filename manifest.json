@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Scraping de Falabella y MercadoLibre",
+  "version": "1.0",
+  "description": "Extrae productos de Falabella y MercadoLibre con paginación",
+  "permissions": ["scripting", "activeTab"],
+  "host_permissions": ["http://localhost:3000/*"],
+  "action": {
+    "default_popup": "src/popup/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.falabella.com.pe/*"],
+      "js": ["content/falabella.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "https://www.mercadolibre.com.pe/*",
+        "https://listado.mercadolibre.com.pe/*",
+        "https://*.mercadolibre.com.pe/*"
+      ],
+      "js": ["content/mercadoLibre.js"],
+      "run_at": "document_end"
+    }
+  ]
+}
