@@ -9,6 +9,16 @@ if ((globalThis as any)[FALABELLA_INJECTED_FLAG]) {
 
 console.log('Falabella content script injected')
 
+let cancelRequested = false
+
+const checkCancelled = () => {
+  if (cancelRequested) {
+    const err = new Error('Cancelled')
+    ;(err as any).cancelled = true
+    throw err
+  }
+}
+
 const parsePriceNumber = (value?: string) => {
   if (!value) return null
   const cleaned = value.replace(/[^0-9.,]/g, '').replace(/,/g, '')
@@ -16,7 +26,8 @@ const parsePriceNumber = (value?: string) => {
   return Number.isFinite(numeric) ? numeric : null
 }
 
-const scrapearProductosFalabella = (keywordOverride?: string) => {
+const scrapearProductosFalabella = async (keywordOverride?: string) => {
+  if (cancelRequested) return []
   // Intentar múltiples selectores para máxima compatibilidad
   let nodeList = document.querySelectorAll('a[data-pod="catalyst-pod"]')
   
@@ -35,19 +46,26 @@ const scrapearProductosFalabella = (keywordOverride?: string) => {
   const keyword = keywordOverride || document.querySelector('h1')?.textContent?.trim() || 'falabella'
   const timestamp = Date.now()
   const datos = Array.from(nodeList)
-  const productos = datos.map((producto: Element, index: number) => {
+  const productos: any[] = []
+
+  for (let index = 0; index < datos.length; index++) {
+    checkCancelled()
+    if (index % 25 === 0) {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    const producto = datos[index]
     const text = (producto as HTMLElement).innerText || ''
     const lines = text.split('\n').filter(line => line.trim())
-    
+
     // Extraer datos de las líneas
     const marca = lines[0] || null
     const titulo = lines[1] || marca || 'Sin titulo'
     const vendedor = lines.find(l => l.includes('Por ')) || null
-    
+
     // Buscar precio (puede estar en diferentes formatos)
     let precioVisible: string | null = null
     let precioNumerico: number | null = null
-    
+
     for (const line of lines) {
       if (line.includes('S/')) {
         precioVisible = line
@@ -55,10 +73,10 @@ const scrapearProductosFalabella = (keywordOverride?: string) => {
         break
       }
     }
-    
+
     const url = (producto as HTMLAnchorElement).href || window.location.href
-    
-    return {
+
+    productos.push({
       site: 'falabella',
       keyword,
       timestamp,
@@ -69,8 +87,8 @@ const scrapearProductosFalabella = (keywordOverride?: string) => {
       url,
       marca,
       vendedor
-    }
-  })
+    })
+  }
   
   console.log(`Falabella: Procesados ${productos.length} productos`)
   return productos
@@ -78,6 +96,7 @@ const scrapearProductosFalabella = (keywordOverride?: string) => {
 
 const clickSiguientePaginaFalabella = (): boolean => {
   try {
+    checkCancelled()
     console.log('Buscando botón con selector: #testId-pagination-bottom-arrow-right')
     // Selector exacto del botón de flecha derecha en la paginación de Falabella
     const btnSiguiente = document.querySelector('#testId-pagination-bottom-arrow-right') as HTMLButtonElement
@@ -125,13 +144,20 @@ const clickSiguientePaginaFalabella = (): boolean => {
   }
 }
 
-const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const wait = async (ms: number) => {
+  const endTime = Date.now() + ms
+  while (Date.now() < endTime) {
+    checkCancelled()
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+}
 
 // Esperar a que cambie la URL (indicador de que navegó a otra página)
 const waitForPageChange = async (currentUrl: string, timeout: number = 15000): Promise<boolean> => {
   const startTime = Date.now()
   
   while (Date.now() - startTime < timeout) {
+    checkCancelled()
     if (window.location.href !== currentUrl) {
       console.log(`✓ URL cambió de: ${currentUrl}`)
       console.log(`✓ Nueva URL: ${window.location.href}`)
@@ -153,6 +179,7 @@ const waitForProductsToLoad = async () => {
   console.log('Esperando productos...')
   
   while (waited < maxWait) {
+    checkCancelled()
     const count = document.querySelectorAll('a[data-pod="catalyst-pod"], [data-testid=ssr-pod]').length
     if (count > 0) {
       console.log(`✓ ${count} productos detectados después de ${waited}ms`)
@@ -216,6 +243,7 @@ const buildPageUrl = (baseUrl: string, pageNumber: number): string => {
 
 // Navegar a una página específica usando window.location
 const navigateToPage = async (pageNumber: number, currentUrl: string): Promise<void> => {
+  checkCancelled()
   const newUrl = buildPageUrl(currentUrl, pageNumber)
   console.log(`Navegando a: ${newUrl}`)
   window.location.href = newUrl
@@ -224,6 +252,7 @@ const navigateToPage = async (pageNumber: number, currentUrl: string): Promise<v
 }
 
 async function scrapeIterativoFalabella(port: chrome.runtime.Port, keyword?: string) {
+  checkCancelled()
   const allProducts = new Map<string, any>()
   const startTime = Date.now()
   
@@ -259,13 +288,15 @@ async function scrapeIterativoFalabella(port: chrome.runtime.Port, keyword?: str
   
   // Esperar a que carguen los productos
   await waitForProductsToLoad()
+  checkCancelled()
   
   // Scrapear productos de esta página
-  const pageProducts = scrapearProductosFalabella(keyword)
+  const pageProducts = await scrapearProductosFalabella(keyword)
   console.log(`✓ ${pageProducts.length} productos encontrados`)
   
   // Agregar productos (sin deduplicación entre páginas)
   for (const product of pageProducts) {
+    checkCancelled()
     const key = buildItemKey(product)
     allProducts.set(key, product)
   }
@@ -300,6 +331,7 @@ chrome.runtime.onConnect.addListener((port) => {
     console.log('Falabella: Mensaje recibido', message)
 
     if (message?.type === 'scrape') {
+      cancelRequested = false
       let timeoutId: number | null = null
       
       try {
@@ -351,8 +383,18 @@ chrome.runtime.onConnect.addListener((port) => {
       } catch (err) {
         if (timeoutId) clearTimeout(timeoutId)
         console.error('✗ Falabella scrape error:', err)
-        port.postMessage({ type: 'scrape_result', error: String(err) })
+        if ((err as any)?.cancelled) {
+          port.postMessage({ type: 'scrape_cancelled' })
+        } else {
+          port.postMessage({ type: 'scrape_result', error: String(err) })
+        }
       }
+    }
+
+    if (message?.type === 'cancel') {
+      cancelRequested = true
+      port.postMessage({ type: 'scrape_cancelled' })
+      return
     }
 
     if (message?.type === 'nextPage') {

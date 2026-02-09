@@ -9,6 +9,16 @@ if ((globalThis as any)[MERCADOLIBRE_INJECTED_FLAG]) {
 
 console.log('MercadoLibre content script injected')
 
+let cancelRequested = false
+
+const checkCancelled = () => {
+  if (cancelRequested) {
+    const err = new Error('Cancelled')
+    ;(err as any).cancelled = true
+    throw err
+  }
+}
+
 interface Producto {
   site: string
   keyword: string
@@ -29,7 +39,8 @@ const parsePriceNumber = (value?: string) => {
   return Number.isFinite(numeric) ? numeric : null
 }
 
-const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => {
+const scrapearProductosMercadoLibre = async (keywordOverride?: string): Promise<Producto[]> => {
+  if (cancelRequested) return []
   // Intentar diferentes selectores para mayor compatibilidad
   const selectors = [
     '.ui-search-result__wrapper',
@@ -55,7 +66,14 @@ const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => 
   const keyword = keywordOverride || (document.querySelector('#cb1-edit') as HTMLInputElement | null)?.value?.trim() || 'mercadolibre'
   const timestamp = Date.now()
   const datos = Array.from(nodeList)
-  const productos = datos.map((producto: Element, index: number) => {
+  const productos: Producto[] = []
+
+  for (let index = 0; index < datos.length; index++) {
+    checkCancelled()
+    if (index % 25 === 0) {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    const producto = datos[index]
     try {
       // Extraer título - intentar múltiples selectores
       const tituloSelectors = [
@@ -64,7 +82,7 @@ const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => 
         'h2.poly-box',
         '[class*="title"]'
       ]
-      
+
       let nombreArticulo = 'Sin título'
       for (const sel of tituloSelectors) {
         const el = producto.querySelector(sel)
@@ -81,7 +99,7 @@ const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => 
         '[class*="price-tag-fraction"]',
         '[class*="money-amount"]'
       ]
-      
+
       let precioArticulo = 'Sin precio'
       for (const sel of precioSelectors) {
         const el = producto.querySelector(sel)
@@ -97,7 +115,7 @@ const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => 
         '.ui-search-price__discount',
         '[class*="discount"]'
       ]
-      
+
       let descuento: string | undefined
       for (const sel of descuentoSelectors) {
         const el = producto.querySelector(sel)
@@ -113,7 +131,7 @@ const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => 
         '.ui-search-item__brand-discoverability',
         '[class*="official-store"]'
       ]
-      
+
       let quienComercializa: string | undefined
       for (const sel of vendedorSelectors) {
         const el = producto.querySelector(sel)
@@ -126,7 +144,7 @@ const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => 
       const url = (producto as HTMLElement).querySelector('a')?.getAttribute('href') || window.location.href
       const precioNumerico = parsePriceNumber(precioArticulo)
 
-      return {
+      productos.push({
         site: 'mercadolibre',
         keyword,
         timestamp,
@@ -137,10 +155,10 @@ const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => 
         url,
         marca: null,
         vendedor: quienComercializa || null
-      }
+      })
     } catch (err) {
       console.error('Error al procesar producto individual:', err)
-      return {
+      productos.push({
         site: 'mercadolibre',
         keyword,
         timestamp,
@@ -151,9 +169,9 @@ const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => 
         url: window.location.href,
         marca: null,
         vendedor: null
-      }
+      })
     }
-  })
+  }
   
   console.log(`MercadoLibre: Procesados ${productos.length} productos`)
   return productos
@@ -161,6 +179,7 @@ const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => 
 
 const clickSiguientePaginaMercadoLibre = (): boolean => {
   try {
+    checkCancelled()
     // Buscar el botón de siguiente página
     const btnSiguiente = document.querySelector('.andes-pagination__button--next:not(.andes-pagination__button--disabled)')
     if (btnSiguiente && btnSiguiente instanceof HTMLElement) {
@@ -174,15 +193,23 @@ const clickSiguientePaginaMercadoLibre = (): boolean => {
   }
 }
 
-const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const wait = async (ms: number) => {
+  const endTime = Date.now() + ms
+  while (Date.now() < endTime) {
+    checkCancelled()
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+}
 
 async function scrapeIterativoMercadoLibre(port: chrome.runtime.Port, keyword?: string) {
+  checkCancelled()
   const maxItems = 100 
   const maxPages = 15
   const all: any[] = []
 
   for (let page = 0; page < maxPages; page++) {
-    const pageProducts = scrapearProductosMercadoLibre(keyword)
+    checkCancelled()
+    const pageProducts = await scrapearProductosMercadoLibre(keyword)
     const base = all.length
     const normalized = pageProducts.map((p: any, idx: number) => ({ ...p, posicion: base + idx + 1 }))
     all.push(...normalized)
@@ -207,6 +234,7 @@ chrome.runtime.onConnect.addListener((port) => {
     console.log('MercadoLibre: Mensaje recibido', message)
 
     if (message?.type === 'scrape') {
+      cancelRequested = false
       try {
         const productos = await scrapeIterativoMercadoLibre(port, typeof message.keyword === 'string' ? message.keyword : undefined)
         console.log('MercadoLibre: Enviando respuesta con', productos.length, 'productos')
@@ -219,8 +247,12 @@ chrome.runtime.onConnect.addListener((port) => {
           console.warn('No se pudo enviar datos al background', err)
         }
       } catch (err) {
-        console.error('MercadoLibre scrape error', err)
-        port.postMessage({ type: 'scrape_result', error: String(err) })
+        if ((err as any)?.cancelled) {
+          port.postMessage({ type: 'scrape_cancelled' })
+        } else {
+          console.error('MercadoLibre scrape error', err)
+          port.postMessage({ type: 'scrape_result', error: String(err) })
+        }
       }
     }
 
@@ -232,6 +264,12 @@ chrome.runtime.onConnect.addListener((port) => {
         console.error('Error en nextPage:', err)
         port.postMessage({ type: 'nextPage_result', success: false, error: String(err) })
       }
+    }
+
+    if (message?.type === 'cancel') {
+      cancelRequested = true
+      port.postMessage({ type: 'scrape_cancelled' })
+      return
     }
   })
 })

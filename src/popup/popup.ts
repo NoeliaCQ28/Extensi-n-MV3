@@ -22,6 +22,7 @@ let todosLosProductos: any[] = []
 let paginaActual: number = 1
 let scrapeEnProgreso = false
 let scrapePausado = false
+let currentScrapePort: chrome.runtime.Port | null = null
 
 // Estado persistente del scraping
 interface ScrapeState {
@@ -110,6 +111,10 @@ function togglePauseResumeButtons(paused: boolean) {
     pause?.classList.remove('hidden')
     resume?.classList.add('hidden')
   }
+}
+
+function setCurrentPort(port: chrome.runtime.Port | null) {
+  currentScrapePort = port
 }
 
 function normalizeKeyword(value: string) {
@@ -246,6 +251,7 @@ async function openAndConnect(site: 'falabella' | 'mercadolibre', keyword: strin
   const created = await chrome.tabs.create({ url, active: true })
   if (!created.id) return null
   await waitForTabLoad(created.id)
+  await tryInjectContentScript(created.id, url)
   return chrome.tabs.connect(created.id, { name: 'popup-connection' })
 }
 
@@ -269,6 +275,7 @@ async function connectToActiveTab(expectedSite?: 'falabella' | 'mercadolibre') {
     return null
   }
 
+  await tryInjectContentScript(activeTab.id, url)
   return chrome.tabs.connect(activeTab.id, { name: 'popup-connection' })
 }
 
@@ -407,6 +414,8 @@ async function init() {
       scrapeEnProgreso = false
       return
     }
+
+    setCurrentPort(port)
     
     // Restaurar variables
     let allScrapedProducts = state.accumulatedProducts || []
@@ -421,6 +430,19 @@ async function init() {
         updateProgress(allScrapedProducts.length + count, total, page)
         return
       }
+
+      if (response?.type === 'scrape_cancelled') {
+        port.onMessage.removeListener(handleMessage)
+        showProgress(false)
+        scrapeEnProgreso = false
+        scrapePausado = false
+        await clearScrapeState()
+        if (state.keyword && state.keyword !== 'scrape_manual') {
+          await updateKeywordStatus(state.keyword, 'Cancelled')
+        }
+        setCurrentPort(null)
+        return
+      }
       
       if (!response || response.type !== 'scrape_result') return
       
@@ -431,6 +453,7 @@ async function init() {
         scrapePausado = false
         await clearScrapeState()
         alert('Error al scrapear: ' + response.error)
+        setCurrentPort(null)
         return
       }
 
@@ -482,6 +505,7 @@ async function init() {
             
             const newPort = chrome.tabs.connect(activeTab.id, { name: 'popup-connection' })
             newPort.onMessage.addListener(handleMessage)
+            setCurrentPort(newPort)
             
             await new Promise<void>((resolve) => {
               const connListener = (msg: any) => {
@@ -501,6 +525,7 @@ async function init() {
             scrapeEnProgreso = false
             await clearScrapeState()
             alert('Error al navegar a la siguiente página')
+            setCurrentPort(null)
           }
         }
       } else {
@@ -513,6 +538,7 @@ async function init() {
         paginaActual = 1
         actualizarVista()
         console.log(`✓ Scraping completo: ${allScrapedProducts.length} productos en total`)
+        setCurrentPort(null)
       }
     }
 
@@ -526,6 +552,20 @@ async function init() {
     
     const confirmar = confirm('¿Seguro que quieres cancelar el scraping? Se perderán los productos recolectados.')
     if (confirmar) {
+      if (currentScrapePort) {
+        try {
+          currentScrapePort.postMessage({ type: 'cancel' })
+        } catch {
+          // ignore
+        }
+      }
+      for (const port of activePorts.values()) {
+        try {
+          port.postMessage({ type: 'cancel' })
+        } catch {
+          // ignore
+        }
+      }
       scrapeEnProgreso = false
       scrapePausado = false
       showProgress(false)
@@ -535,8 +575,10 @@ async function init() {
       
       // Actualizar keyword a estado Idle si corresponde
       if (state && state.keyword && state.keyword !== 'scrape_manual') {
-        await updateKeywordStatus(state.keyword, 'Idle')
+        await updateKeywordStatus(state.keyword, 'Cancelled')
       }
+
+      setCurrentPort(null)
     }
   })
 
@@ -581,6 +623,8 @@ async function init() {
     const port = await openAndConnect(site, keyword)
     if (!port) return
 
+    setCurrentPort(port)
+
     // Mostrar barra de progreso
     showProgress(true)
     updateProgress(0)
@@ -598,6 +642,17 @@ async function init() {
         updateProgress(allScrapedProducts.length + count, total, page)
         return
       }
+      if (message?.type === 'scrape_cancelled') {
+        port.onMessage.removeListener(handleResult)
+        showProgress(false)
+        scrapeEnProgreso = false
+        scrapePausado = false
+        await clearScrapeState()
+        await updateKeywordStatus(keyword, 'Cancelled')
+        setCurrentPort(null)
+        return
+      }
+
       if (message?.type !== 'scrape_result') return
 
       console.log('Popup: Recibido scrape_result:', message)
@@ -611,6 +666,7 @@ async function init() {
         await clearScrapeState()
         await updateKeywordStatus(keyword, 'Error')
         alert(`Error al scrapear: ${message.error}`)
+        setCurrentPort(null)
         return
       }
 
@@ -684,6 +740,7 @@ async function init() {
             // Reconectar al nuevo content script
             const newPort = chrome.tabs.connect(activeTab.id, { name: 'popup-connection' })
             newPort.onMessage.addListener(handleResult)
+            setCurrentPort(newPort)
             
             // Esperar mensaje de conexión
             await new Promise<void>((resolve) => {
@@ -707,6 +764,7 @@ async function init() {
             await clearScrapeState()
             await updateKeywordStatus(keyword, 'Error')
             alert('Error al navegar a la siguiente página')
+            setCurrentPort(null)
           }
         }
       } else {
@@ -728,6 +786,7 @@ async function init() {
         todosLosProductos = allScrapedProducts
         paginaActual = 1
         actualizarVista()
+        setCurrentPort(null)
       }
     }
 
@@ -744,6 +803,8 @@ async function init() {
     
     const port = await connectToActiveTab()
     if (!port) return
+
+    setCurrentPort(port)
     
     // Detectar el sitio desde la URL activa
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
@@ -774,6 +835,16 @@ async function init() {
         updateProgress(allScrapedProducts.length + count, total, page)
         return
       }
+
+      if (response?.type === 'scrape_cancelled') {
+        port.onMessage.removeListener(handleMessage)
+        showProgress(false)
+        scrapeEnProgreso = false
+        scrapePausado = false
+        await clearScrapeState()
+        setCurrentPort(null)
+        return
+      }
       
       if (!response || response.type !== 'scrape_result') return
       
@@ -788,6 +859,7 @@ async function init() {
         await clearScrapeState()
         console.error('Error en content script:', response.error)
         alert('Error al scrapear.\n\nPor favor recarga la página (F5) y vuelve a intentar.')
+        setCurrentPort(null)
         return
       }
 
@@ -800,6 +872,7 @@ async function init() {
         scrapePausado = false
         await clearScrapeState()
         alert('No se encontraron productos en esta página.\n\nAsegúrate de estar en una página de resultados de búsqueda.')
+        setCurrentPort(null)
         return
       }
 
@@ -875,6 +948,7 @@ async function init() {
             // Reconectar al nuevo content script
             const newPort = chrome.tabs.connect(activeTab.id, { name: 'popup-connection' })
             newPort.onMessage.addListener(handleMessage)
+            setCurrentPort(newPort)
             
             // Esperar mensaje de conexión
             console.log('Esperando confirmación de conexión...')
@@ -900,6 +974,7 @@ async function init() {
             scrapePausado = false
             await clearScrapeState()
             alert('Error al navegar a la siguiente página')
+            setCurrentPort(null)
           }
         }
       } else {
@@ -923,6 +998,7 @@ async function init() {
 
         // Mostrar mensaje de éxito
         console.log(`✓ Scraping completo: ${allScrapedProducts.length} productos en total`)
+        setCurrentPort(null)
       }
     }
 

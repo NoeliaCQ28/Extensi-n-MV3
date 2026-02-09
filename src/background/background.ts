@@ -6,7 +6,7 @@ chrome.runtime.onInstalled.addListener(() => {
 })
 
 // Listen for scraped data from content scripts and forward to external API
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender) => {
   if (message?.type === 'scrapedData') {
     const url = 'http://localhost:3000/data'
     const payload = message.data
@@ -25,7 +25,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try { text = await res.text() } catch (e) { console.warn('Could not read response text:', e) }
         console.log('✓ Posted scraped data successfully | Status:', res.status, '| URL:', url)
         if (text) console.log('  Response body:', text.substring(0, 200))
-        sendResponse({ ok: res.ok, status: res.status, body: text })
+        chrome.runtime.sendMessage({
+          type: 'scrapedDataResult',
+          ok: res.ok,
+          status: res.status,
+          body: text
+        }, () => {})
       })
       .catch((err) => {
         console.error('✗ Error posting scraped data to', url)
@@ -37,10 +42,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.error('  → Network error: Check if server is running, CORS, or firewall blocking')
           console.error('  → URL being requested:', url)
         }
-        sendResponse({ ok: false, error: String(err), message: err?.message, name: err?.name })
+        chrome.runtime.sendMessage({
+          type: 'scrapedDataResult',
+          ok: false,
+          error: String(err),
+          message: err?.message,
+          name: err?.name
+        }, () => {})
       })
-
-    // Keep the message channel open for async response
-    return true
   }
 })
