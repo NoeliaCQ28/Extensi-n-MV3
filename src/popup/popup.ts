@@ -20,6 +20,47 @@ const activePorts = new Map<string, chrome.runtime.Port>()
 
 let todosLosProductos: any[] = []
 let paginaActual: number = 1
+let scrapeEnProgreso = false
+
+// Elementos de la barra de progreso
+const progressContainer = () => document.getElementById('progressContainer')
+const progressText = () => document.getElementById('progressText')
+const progressCount = () => document.getElementById('progressCount')
+const progressBar = () => document.getElementById('progressBar')
+const progressPage = () => document.getElementById('progressPage')
+const progressTotal = () => document.getElementById('progressTotal')
+
+function showProgress(show: boolean) {
+  const container = progressContainer()
+  if (container) {
+    container.classList.toggle('hidden', !show)
+  }
+}
+
+function updateProgress(count: number, total?: number, pageNum?: number) {
+  const countEl = progressCount()
+  const barEl = progressBar()
+  const pageEl = progressPage()
+  const totalEl = progressTotal()
+  
+  if (countEl) countEl.textContent = count.toString()
+  
+  if (total && total > 0 && barEl) {
+    const pct = Math.min((count / total) * 100, 100)
+    barEl.style.width = `${pct}%`
+  } else if (barEl) {
+    // Sin total conocido, mostrar barra indeterminada
+    barEl.style.width = '50%'
+  }
+  
+  if (pageNum && pageEl) {
+    pageEl.textContent = `Página ${pageNum}`
+  }
+  
+  if (total && totalEl) {
+    totalEl.textContent = `Total esperado: ~${total} productos`
+  }
+}
 
 function normalizeKeyword(value: string) {
   return value.replace(/\s+/g, ' ').trim()
@@ -290,23 +331,127 @@ async function init() {
     const port = await openAndConnect(site, keyword)
     if (!port) return
 
+    // Mostrar barra de progreso
+    showProgress(true)
+    updateProgress(0)
+    scrapeEnProgreso = true
+    
+    let allScrapedProducts: any[] = []
+    let currentPageNum = 1
+    
     const handleResult = async (message: any) => {
       if (message?.type === 'progress') {
-        await updateKeywordData(keyword, 'Running', Number(message.count) || 0)
+        const count = Number(message.count) || 0
+        const total = message.total || undefined
+        const page = message.page || undefined
+        await updateKeywordData(keyword, 'Running', allScrapedProducts.length + count)
+        updateProgress(allScrapedProducts.length + count, total, page)
         return
       }
       if (message?.type !== 'scrape_result') return
-      port.onMessage.removeListener(handleResult)
+
+      console.log('Popup: Recibido scrape_result:', message)
+      console.log('hasNextPage:', message.hasNextPage, 'currentPage:', message.currentPage, 'totalPages:', message.totalPages)
 
       if (message.error) {
+        port.onMessage.removeListener(handleResult)
+        showProgress(false)
+        scrapeEnProgreso = false
         await updateKeywordStatus(keyword, 'Error')
+        alert(`Error al scrapear: ${message.error}`)
         return
       }
 
-      const result = Array.isArray(message.result) ? message.result : []
-      const resultKey = buildResultsKey(keyword)
-      await chrome.storage.local.set({ [resultKey]: result })
-      await updateKeywordData(keyword, 'Done', result.length)
+      const pageProducts = Array.isArray(message.result) ? message.result : []
+      allScrapedProducts.push(...pageProducts)
+      
+      console.log(`Página ${currentPageNum}: ${pageProducts.length} productos. Total acumulado: ${allScrapedProducts.length}`)
+      
+      // Actualizar progress con el total acumulado
+      const total = message.total || undefined
+      await updateKeywordData(keyword, 'Running', allScrapedProducts.length)
+      updateProgress(allScrapedProducts.length, total, currentPageNum)
+      
+      // Verificar si hay más páginas
+      console.log('Verificando navegación:', { 
+        hasNextPage: message.hasNextPage, 
+        site, 
+        currentPageNum, 
+        shouldNavigate: message.hasNextPage && site === 'falabella' 
+      })
+      
+      if (message.hasNextPage && site === 'falabella') {
+        currentPageNum++
+        console.log(`Navegando a página ${currentPageNum}...`)
+        
+        // Obtener la tab actual para navegar
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+        const activeTab = tabs?.[0]
+        
+        if (activeTab?.id) {
+          try {
+            // Construir URL para la siguiente página
+            const currentUrl = activeTab.url || ''
+            const url = new URL(currentUrl)
+            url.searchParams.set('page', currentPageNum.toString())
+            const nextPageUrl = url.toString()
+            
+            // Navegar a la siguiente página
+            await chrome.tabs.update(activeTab.id, { url: nextPageUrl })
+            
+            // Esperar a que cargue la nueva página
+            await new Promise<void>((resolve) => {
+              const listener = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
+                if (tabId === activeTab.id && info.status === 'complete') {
+                  chrome.tabs.onUpdated.removeListener(listener)
+                  setTimeout(() => resolve(), 2000) // Esperar 2s extra después del complete
+                }
+              }
+              chrome.tabs.onUpdated.addListener(listener)
+            })
+            
+            // Reconectar al nuevo content script
+            const newPort = chrome.tabs.connect(activeTab.id, { name: 'popup-connection' })
+            newPort.onMessage.addListener(handleResult)
+            
+            // Esperar mensaje de conexión
+            await new Promise<void>((resolve) => {
+              const connListener = (msg: any) => {
+                if (msg?.type === 'connection_established') {
+                  newPort.onMessage.removeListener(connListener)
+                  resolve()
+                }
+              }
+              newPort.onMessage.addListener(connListener)
+            })
+            
+            // Iniciar scraping de la nueva página
+            newPort.postMessage({ type: 'scrape', keyword })
+          } catch (err) {
+            console.error('Error navegando a siguiente página:', err)
+            port.onMessage.removeListener(handleResult)
+            showProgress(false)
+            scrapeEnProgreso = false
+            await updateKeywordStatus(keyword, 'Error')
+            alert('Error al navegar a la siguiente página')
+          }
+        }
+      } else {
+        // No hay más páginas o no es Falabella, terminar
+        console.log('Finalizando scraping. Razón:', !message.hasNextPage ? 'No hay más páginas' : 'No es Falabella')
+        port.onMessage.removeListener(handleResult)
+        showProgress(false)
+        scrapeEnProgreso = false
+        
+        const resultKey = buildResultsKey(keyword)
+        await chrome.storage.local.set({ [resultKey]: allScrapedProducts })
+        await updateKeywordData(keyword, 'Done', allScrapedProducts.length)
+        
+        // Mostrar resultados en el cuadro
+        todosLosProductos = allScrapedProducts
+        paginaActual = 1
+        actualizarVista()
+      }
     }
 
     port.onMessage.addListener(handleResult)
@@ -315,36 +460,164 @@ async function init() {
 
   // Wire up click handlers
   scrapeButtonElement?.addEventListener('click', async () =>  {
+    if (scrapeEnProgreso) {
+      alert('Ya hay un scraping en progreso. Espera a que termine.')
+      return
+    }
+    
     const port = await connectToActiveTab()
     if (!port) return
+    
+    // Detectar el sitio desde la URL activa
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+    const activeTab = tabs?.[0]
+    const currentUrl = activeTab?.url || ''
+    let site: 'falabella' | 'mercadolibre' | 'unknown' = 'unknown'
+    
+    if (currentUrl.includes('falabella.com')) {
+      site = 'falabella'
+    } else if (currentUrl.includes('mercadolibre.com')) {
+      site = 'mercadolibre'
+    }
 
-    const handleMessage = (response: any) => {
+    // Mostrar barra de progreso
+    showProgress(true)
+    updateProgress(0)
+    scrapeEnProgreso = true
+    
+    let allScrapedProducts: any[] = []
+    let currentPageNum = 1
+
+    const handleMessage = async (response: any) => {
+      // Manejar progreso en tiempo real
+      if (response?.type === 'progress') {
+        const count = Number(response.count) || 0
+        const total = response.total || undefined
+        const page = response.page || undefined
+        updateProgress(allScrapedProducts.length + count, total, page)
+        return
+      }
+      
       if (!response || response.type !== 'scrape_result') return
-      port.onMessage.removeListener(handleMessage)
+      
+      console.log('Popup: Recibido scrape_result:', response)
+      console.log('hasNextPage:', response.hasNextPage, 'currentPage:', response.currentPage, 'totalPages:', response.totalPages)
 
       if (response.error) {
+        port.onMessage.removeListener(handleMessage)
+        showProgress(false)
+        scrapeEnProgreso = false
         console.error('Error en content script:', response.error)
         alert('Error al scrapear.\n\nPor favor recarga la página (F5) y vuelve a intentar.')
         return
       }
 
-      const products = response.result || []
-
-      if (products.length === 0) {
+      const pageProducts = response.result || []
+      
+      if (pageProducts.length === 0 && currentPageNum === 1) {
+        port.onMessage.removeListener(handleMessage)
+        showProgress(false)
+        scrapeEnProgreso = false
         alert('No se encontraron productos en esta página.\n\nAsegúrate de estar en una página de resultados de búsqueda.')
         return
       }
 
-      // Agregar productos a la lista acumulada
-      todosLosProductos = [...todosLosProductos, ...products]
+      // Acumular productos
+      allScrapedProducts.push(...pageProducts)
+      console.log(`Página ${currentPageNum}: ${pageProducts.length} productos. Total acumulado: ${allScrapedProducts.length}`)
+      
+      // Actualizar progress con el total acumulado
+      const total = response.total || undefined
+      updateProgress(allScrapedProducts.length, total, currentPageNum)
+      
+      // Verificar si hay más páginas y es Falabella
+      console.log('Verificando navegación:', { 
+        hasNextPage: response.hasNextPage, 
+        site, 
+        currentPageNum, 
+        shouldNavigate: response.hasNextPage && site === 'falabella' 
+      })
+      
+      if (response.hasNextPage && site === 'falabella') {
+        currentPageNum++
+        console.log(`Navegando a página ${currentPageNum}...`)
+        
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+        const activeTab = tabs?.[0]
+        
+        if (activeTab?.id) {
+          try {
+            // Construir URL para la siguiente página
+            const currentUrl = activeTab.url || ''
+            const url = new URL(currentUrl)
+            url.searchParams.set('page', currentPageNum.toString())
+            const nextPageUrl = url.toString()
+            
+            console.log(`Actualizando tab a: ${nextPageUrl}`)
+            
+            // Navegar a la siguiente página
+            await chrome.tabs.update(activeTab.id, { url: nextPageUrl })
+            
+            // Esperar a que cargue la nueva página
+            console.log('Esperando que la página cargue...')
+            await new Promise<void>((resolve) => {
+              const listener = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
+                if (tabId === activeTab.id && info.status === 'complete') {
+                  chrome.tabs.onUpdated.removeListener(listener)
+                  console.log('Página cargada, esperando 2s extra...')
+                  setTimeout(() => resolve(), 2000)
+                }
+              }
+              chrome.tabs.onUpdated.addListener(listener)
+            })
+            
+            console.log('Conectando al nuevo content script...')
+            // Reconectar al nuevo content script
+            const newPort = chrome.tabs.connect(activeTab.id, { name: 'popup-connection' })
+            newPort.onMessage.addListener(handleMessage)
+            
+            // Esperar mensaje de conexión
+            console.log('Esperando confirmación de conexión...')
+            await new Promise<void>((resolve) => {
+              const connListener = (msg: any) => {
+                if (msg?.type === 'connection_established') {
+                  newPort.onMessage.removeListener(connListener)
+                  console.log('Conexión establecida ✓')
+                  resolve()
+                }
+              }
+              newPort.onMessage.addListener(connListener)
+            })
+            
+            // Iniciar scraping de la nueva página
+            console.log('Iniciando scraping de la nueva página...')
+            newPort.postMessage({ type: 'scrape' })
+          } catch (err) {
+            console.error('Error navegando a siguiente página:', err)
+            port.onMessage.removeListener(handleMessage)
+            showProgress(false)
+            scrapeEnProgreso = false
+            alert('Error al navegar a la siguiente página')
+          }
+        }
+      } else {
+        // No hay más páginas, terminar
+        console.log('Finalizando scraping. Razón:', !response.hasNextPage ? 'No hay más páginas' : 'No es Falabella')
+        port.onMessage.removeListener(handleMessage)
+        showProgress(false)
+        scrapeEnProgreso = false
+        
+        // Guardar todos los productos extraídos
+        todosLosProductos = allScrapedProducts
 
-      // Resetear a la primera página cuando se scrapean nuevos productos
-      paginaActual = 1
+        // Resetear a la primera página cuando se scrapean nuevos productos
+        paginaActual = 1
 
-      actualizarVista()
+        actualizarVista()
 
-      // Mostrar mensaje de éxito
-      console.log(`Scrapeados ${products.length} productos (${todosLosProductos.length} en total)`)
+        // Mostrar mensaje de éxito
+        console.log(`✓ Scraping completo: ${allScrapedProducts.length} productos en total`)
+      }
     }
 
     port.onMessage.addListener(handleMessage)
