@@ -21,6 +21,40 @@ const activePorts = new Map<string, chrome.runtime.Port>()
 let todosLosProductos: any[] = []
 let paginaActual: number = 1
 let scrapeEnProgreso = false
+let scrapePausado = false
+
+// Estado persistente del scraping
+interface ScrapeState {
+  isRunning: boolean
+  isPaused: boolean
+  keyword: string
+  site: 'falabella' | 'mercadolibre'
+  currentPage: number
+  totalPages: number
+  productsCount: number
+  accumulatedProducts: any[]
+  timestamp: number
+}
+
+const SCRAPE_STATE_KEY = 'scrape_state'
+
+// Guardar estado del scraping
+async function saveScrapeState(state: Partial<ScrapeState>) {
+  const current = await loadScrapeState()
+  const updated = { ...current, ...state, timestamp: Date.now() }
+  await chrome.storage.local.set({ [SCRAPE_STATE_KEY]: updated })
+}
+
+// Cargar estado del scraping
+async function loadScrapeState(): Promise<ScrapeState | null> {
+  const result = await chrome.storage.local.get(SCRAPE_STATE_KEY)
+  return result[SCRAPE_STATE_KEY] || null
+}
+
+// Limpiar estado del scraping
+async function clearScrapeState() {
+  await chrome.storage.local.remove(SCRAPE_STATE_KEY)
+}
 
 // Elementos de la barra de progreso
 const progressContainer = () => document.getElementById('progressContainer')
@@ -29,6 +63,9 @@ const progressCount = () => document.getElementById('progressCount')
 const progressBar = () => document.getElementById('progressBar')
 const progressPage = () => document.getElementById('progressPage')
 const progressTotal = () => document.getElementById('progressTotal')
+const pauseBtn = () => document.getElementById('pauseBtn')
+const resumeBtn = () => document.getElementById('resumeBtn')
+const cancelBtn = () => document.getElementById('cancelBtn')
 
 function showProgress(show: boolean) {
   const container = progressContainer()
@@ -59,6 +96,19 @@ function updateProgress(count: number, total?: number, pageNum?: number) {
   
   if (total && totalEl) {
     totalEl.textContent = `Total esperado: ~${total} productos`
+  }
+}
+
+function togglePauseResumeButtons(paused: boolean) {
+  const pause = pauseBtn()
+  const resume = resumeBtn()
+  
+  if (paused) {
+    pause?.classList.add('hidden')
+    resume?.classList.remove('hidden')
+  } else {
+    pause?.classList.remove('hidden')
+    resume?.classList.add('hidden')
   }
 }
 
@@ -289,6 +339,206 @@ async function tryInjectContentScript(tabId: number, url: string) {
 
 async function init() {
   await loadKeywords()
+  
+  // Verificar si hay scraping en progreso
+  const savedState = await loadScrapeState()
+  if (savedState && savedState.isRunning && !savedState.isPaused) {
+    // Hay un scraping en progreso, preguntar si quiere continuar
+    const continuar = confirm(
+      `Se detectó un scraping en progreso:\n\n` +
+      `Keyword: ${savedState.keyword}\n` +
+      `Página: ${savedState.currentPage} de ${savedState.totalPages}\n` +
+      `Productos: ${savedState.productsCount}\n\n` +
+      `¿Quieres continuar donde lo dejaste?`
+    )
+    
+    if (continuar) {
+      // Restaurar estado y continuar
+      scrapeEnProgreso = true
+      showProgress(true)
+      updateProgress(savedState.productsCount, savedState.totalPages * 48, savedState.currentPage)
+      
+      // Nota: El usuario deberá estar en la página correcta de Falabella
+      // El popup detectará automáticamente y continuará
+      console.log('Estado de scraping restaurado:', savedState)
+    } else {
+      // No quiere continuar, limpiar estado
+      await clearScrapeState()
+    }
+  } else if (savedState && savedState.isPaused) {
+    // Hay un scraping pausado
+    showProgress(true)
+    scrapePausado = true
+    togglePauseResumeButtons(true)
+    updateProgress(savedState.productsCount, savedState.totalPages * 48, savedState.currentPage)
+    const textEl = progressText()
+    if (textEl) textEl.textContent = '⏸ Pausado - Haz clic en Reanudar para continuar'
+  }
+
+  // Event listeners para controles de scraping
+  pauseBtn()?.addEventListener('click', async () => {
+    scrapePausado = true
+    scrapeEnProgreso = false  // Liberar el flag para permitir operaciones futuras
+    togglePauseResumeButtons(true)
+    await saveScrapeState({ isPaused: true, isRunning: false })
+    const textEl = progressText()
+    if (textEl) textEl.textContent = '⏸ Pausado - Haz clic en Reanudar para continuar'
+    console.log('Scraping pausado')
+  })
+
+  resumeBtn()?.addEventListener('click', async () => {
+    const state = await loadScrapeState()
+    if (!state) {
+      alert('No hay un scraping pausado para reanudar')
+      return
+    }
+    
+    scrapePausado = false
+    scrapeEnProgreso = true
+    togglePauseResumeButtons(false)
+    const textEl = progressText()
+    if (textEl) textEl.textContent = 'Extrayendo productos...'
+    console.log('Scraping reanudado desde página', state.currentPage)
+    
+    // Continuar el scraping automáticamente
+    const port = await connectToActiveTab()
+    if (!port) {
+      alert('No se pudo conectar con la página. Asegúrate de estar en la página correcta de ' + state.site)
+      scrapeEnProgreso = false
+      return
+    }
+    
+    // Restaurar variables
+    let allScrapedProducts = state.accumulatedProducts || []
+    let currentPageNum = state.currentPage
+    
+    // Continuar con el scraping desde donde se quedó
+    const handleMessage = async (response: any) => {
+      if (response?.type === 'progress') {
+        const count = Number(response.count) || 0
+        const total = response.total || undefined
+        const page = response.page || undefined
+        updateProgress(allScrapedProducts.length + count, total, page)
+        return
+      }
+      
+      if (!response || response.type !== 'scrape_result') return
+      
+      if (response.error) {
+        port.onMessage.removeListener(handleMessage)
+        showProgress(false)
+        scrapeEnProgreso = false
+        scrapePausado = false
+        await clearScrapeState()
+        alert('Error al scrapear: ' + response.error)
+        return
+      }
+
+      const pageProducts = response.result || []
+      allScrapedProducts.push(...pageProducts)
+      console.log(`Página ${currentPageNum}: ${pageProducts.length} productos. Total acumulado: ${allScrapedProducts.length}`)
+      
+      const total = response.total || undefined
+      updateProgress(allScrapedProducts.length, total, currentPageNum)
+      
+      await saveScrapeState({
+        isRunning: true,
+        isPaused: false,
+        keyword: state.keyword,
+        site: state.site,
+        currentPage: currentPageNum,
+        totalPages: response.totalPages || state.totalPages,
+        productsCount: allScrapedProducts.length,
+        accumulatedProducts: allScrapedProducts
+      })
+      
+      if (scrapePausado) {
+        console.log('Scraping pausado por el usuario')
+        port.onMessage.removeListener(handleMessage)
+        return
+      }
+      
+      if (response.hasNextPage && state.site === 'falabella') {
+        currentPageNum++
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+        const activeTab = tabs?.[0]
+        
+        if (activeTab?.id) {
+          try {
+            const currentUrl = activeTab.url || ''
+            const url = new URL(currentUrl)
+            url.searchParams.set('page', currentPageNum.toString())
+            await chrome.tabs.update(activeTab.id, { url: url.toString() })
+            
+            await new Promise<void>((resolve) => {
+              const listener = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
+                if (tabId === activeTab.id && info.status === 'complete') {
+                  chrome.tabs.onUpdated.removeListener(listener)
+                  setTimeout(() => resolve(), 2000)
+                }
+              }
+              chrome.tabs.onUpdated.addListener(listener)
+            })
+            
+            const newPort = chrome.tabs.connect(activeTab.id, { name: 'popup-connection' })
+            newPort.onMessage.addListener(handleMessage)
+            
+            await new Promise<void>((resolve) => {
+              const connListener = (msg: any) => {
+                if (msg?.type === 'connection_established') {
+                  newPort.onMessage.removeListener(connListener)
+                  resolve()
+                }
+              }
+              newPort.onMessage.addListener(connListener)
+            })
+            
+            newPort.postMessage({ type: 'scrape' })
+          } catch (err) {
+            console.error('Error navegando:', err)
+            port.onMessage.removeListener(handleMessage)
+            showProgress(false)
+            scrapeEnProgreso = false
+            await clearScrapeState()
+            alert('Error al navegar a la siguiente página')
+          }
+        }
+      } else {
+        port.onMessage.removeListener(handleMessage)
+        showProgress(false)
+        scrapeEnProgreso = false
+        scrapePausado = false
+        await clearScrapeState()
+        todosLosProductos = allScrapedProducts
+        paginaActual = 1
+        actualizarVista()
+        console.log(`✓ Scraping completo: ${allScrapedProducts.length} productos en total`)
+      }
+    }
+
+    port.onMessage.addListener(handleMessage)
+    port.postMessage({ type: 'scrape' })
+  })
+
+  cancelBtn()?.addEventListener('click', async () => {
+    // Obtener estado ANTES de limpiarlo
+    const state = await loadScrapeState()
+    
+    const confirmar = confirm('¿Seguro que quieres cancelar el scraping? Se perderán los productos recolectados.')
+    if (confirmar) {
+      scrapeEnProgreso = false
+      scrapePausado = false
+      showProgress(false)
+      togglePauseResumeButtons(false)
+      await clearScrapeState()
+      console.log('Scraping cancelado')
+      
+      // Actualizar keyword a estado Idle si corresponde
+      if (state && state.keyword && state.keyword !== 'scrape_manual') {
+        await updateKeywordStatus(state.keyword, 'Idle')
+      }
+    }
+  })
 
   addKeywordButtonElement?.addEventListener('click', async () => {
     const value = normalizeKeyword(keywordInputElement?.value || '')
@@ -357,6 +607,8 @@ async function init() {
         port.onMessage.removeListener(handleResult)
         showProgress(false)
         scrapeEnProgreso = false
+        scrapePausado = false
+        await clearScrapeState()
         await updateKeywordStatus(keyword, 'Error')
         alert(`Error al scrapear: ${message.error}`)
         return
@@ -371,6 +623,25 @@ async function init() {
       const total = message.total || undefined
       await updateKeywordData(keyword, 'Running', allScrapedProducts.length)
       updateProgress(allScrapedProducts.length, total, currentPageNum)
+      
+      // Guardar estado del scraping
+      await saveScrapeState({
+        isRunning: true,
+        isPaused: scrapePausado,
+        keyword,
+        site,
+        currentPage: currentPageNum,
+        totalPages: message.totalPages || 150,
+        productsCount: allScrapedProducts.length,
+        accumulatedProducts: allScrapedProducts
+      })
+      
+      // Verificar si está pausado
+      if (scrapePausado) {
+        console.log('Scraping pausado por el usuario')
+        port.onMessage.removeListener(handleResult)
+        return
+      }
       
       // Verificar si hay más páginas
       console.log('Verificando navegación:', { 
@@ -432,6 +703,8 @@ async function init() {
             port.onMessage.removeListener(handleResult)
             showProgress(false)
             scrapeEnProgreso = false
+            scrapePausado = false
+            await clearScrapeState()
             await updateKeywordStatus(keyword, 'Error')
             alert('Error al navegar a la siguiente página')
           }
@@ -442,10 +715,14 @@ async function init() {
         port.onMessage.removeListener(handleResult)
         showProgress(false)
         scrapeEnProgreso = false
+        scrapePausado = false
         
         const resultKey = buildResultsKey(keyword)
         await chrome.storage.local.set({ [resultKey]: allScrapedProducts })
         await updateKeywordData(keyword, 'Done', allScrapedProducts.length)
+        
+        // Limpiar estado del scraping
+        await clearScrapeState()
         
         // Mostrar resultados en el cuadro
         todosLosProductos = allScrapedProducts
@@ -507,6 +784,8 @@ async function init() {
         port.onMessage.removeListener(handleMessage)
         showProgress(false)
         scrapeEnProgreso = false
+        scrapePausado = false
+        await clearScrapeState()
         console.error('Error en content script:', response.error)
         alert('Error al scrapear.\n\nPor favor recarga la página (F5) y vuelve a intentar.')
         return
@@ -518,6 +797,8 @@ async function init() {
         port.onMessage.removeListener(handleMessage)
         showProgress(false)
         scrapeEnProgreso = false
+        scrapePausado = false
+        await clearScrapeState()
         alert('No se encontraron productos en esta página.\n\nAsegúrate de estar en una página de resultados de búsqueda.')
         return
       }
@@ -529,6 +810,25 @@ async function init() {
       // Actualizar progress con el total acumulado
       const total = response.total || undefined
       updateProgress(allScrapedProducts.length, total, currentPageNum)
+      
+      // Guardar estado del scraping
+      await saveScrapeState({
+        isRunning: true,
+        isPaused: scrapePausado,
+        keyword: 'scrape_manual', // Identificador para scraping manual
+        site,
+        currentPage: currentPageNum,
+        totalPages: response.totalPages || 150,
+        productsCount: allScrapedProducts.length,
+        accumulatedProducts: allScrapedProducts
+      })
+      
+      // Verificar si está pausado
+      if (scrapePausado) {
+        console.log('Scraping pausado por el usuario')
+        port.onMessage.removeListener(handleMessage)
+        return
+      }
       
       // Verificar si hay más páginas y es Falabella
       console.log('Verificando navegación:', { 
@@ -597,6 +897,8 @@ async function init() {
             port.onMessage.removeListener(handleMessage)
             showProgress(false)
             scrapeEnProgreso = false
+            scrapePausado = false
+            await clearScrapeState()
             alert('Error al navegar a la siguiente página')
           }
         }
@@ -606,6 +908,10 @@ async function init() {
         port.onMessage.removeListener(handleMessage)
         showProgress(false)
         scrapeEnProgreso = false
+        scrapePausado = false
+        
+        // Limpiar estado del scraping
+        await clearScrapeState()
         
         // Guardar todos los productos extraídos
         todosLosProductos = allScrapedProducts
