@@ -63,7 +63,7 @@ const scrapearProductosMercadoLibre = async (keywordOverride?: string): Promise<
     return []
   }
   
-  const keyword = keywordOverride || (document.querySelector('#cb1-edit') as HTMLInputElement | null)?.value?.trim() || 'mercadolibre'
+  const keyword = keywordOverride || (document.querySelector('#cb1-edit') as HTMLInputElement | null)?.value?.trim() || null
   const timestamp = Date.now()
   const datos = Array.from(nodeList)
   const productos: Producto[] = []
@@ -83,7 +83,7 @@ const scrapearProductosMercadoLibre = async (keywordOverride?: string): Promise<
         '[class*="title"]'
       ]
 
-      let nombreArticulo = 'Sin título'
+      let nombreArticulo: string | null = null
       for (const sel of tituloSelectors) {
         const el = producto.querySelector(sel)
         if (el?.textContent?.trim()) {
@@ -100,7 +100,7 @@ const scrapearProductosMercadoLibre = async (keywordOverride?: string): Promise<
         '[class*="money-amount"]'
       ]
 
-      let precioArticulo = 'Sin precio'
+      let precioArticulo: string | null = null
       for (const sel of precioSelectors) {
         const el = producto.querySelector(sel)
         if (el?.textContent?.trim()) {
@@ -141,8 +141,8 @@ const scrapearProductosMercadoLibre = async (keywordOverride?: string): Promise<
         }
       }
 
-      const url = (producto as HTMLElement).querySelector('a')?.getAttribute('href') || window.location.href
-      const precioNumerico = parsePriceNumber(precioArticulo)
+      const url = (producto as HTMLElement).querySelector('a')?.getAttribute('href') || null
+      const precioNumerico = parsePriceNumber(precioArticulo || undefined)
 
       productos.push({
         site: 'mercadolibre',
@@ -150,7 +150,7 @@ const scrapearProductosMercadoLibre = async (keywordOverride?: string): Promise<
         timestamp,
         posicion: index + 1,
         titulo: nombreArticulo,
-        precioVisible: precioArticulo || null,
+        precioVisible: precioArticulo,
         precioNumerico,
         url,
         marca: null,
@@ -163,10 +163,10 @@ const scrapearProductosMercadoLibre = async (keywordOverride?: string): Promise<
         keyword,
         timestamp,
         posicion: index + 1,
-        titulo: 'Error al procesar',
+        titulo: null,
         precioVisible: null,
         precioNumerico: null,
-        url: window.location.href,
+        url: null,
         marca: null,
         vendedor: null
       })

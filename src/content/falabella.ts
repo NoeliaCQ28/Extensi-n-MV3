@@ -43,7 +43,7 @@ const scrapearProductosFalabella = async (keywordOverride?: string) => {
   
   console.log(`Falabella: Encontrados ${nodeList.length} productos`)
   
-  const keyword = keywordOverride || document.querySelector('h1')?.textContent?.trim() || 'falabella'
+  const keyword = keywordOverride || document.querySelector('h1')?.textContent?.trim() || null
   const timestamp = Date.now()
   const datos = Array.from(nodeList)
   const productos: any[] = []
@@ -59,7 +59,7 @@ const scrapearProductosFalabella = async (keywordOverride?: string) => {
 
     // Extraer datos de las líneas
     const marca = lines[0] || null
-    const titulo = lines[1] || marca || 'Sin titulo'
+    const titulo = lines[1] || null
     const vendedor = lines.find(l => l.includes('Por ')) || null
 
     // Buscar precio (puede estar en diferentes formatos)
@@ -74,7 +74,7 @@ const scrapearProductosFalabella = async (keywordOverride?: string) => {
       }
     }
 
-    const url = (producto as HTMLAnchorElement).href || window.location.href
+    const url = (producto as HTMLAnchorElement).href || null
 
     productos.push({
       site: 'falabella',
@@ -85,8 +85,8 @@ const scrapearProductosFalabella = async (keywordOverride?: string) => {
       precioVisible,
       precioNumerico,
       url,
-      marca,
-      vendedor
+      marca: marca || null,
+      vendedor: vendedor || null
     })
   }
   
