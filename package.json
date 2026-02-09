@@ -9,7 +9,11 @@
     "watch:build": "vite build --watch",
     "watch:manifest": "nodemon --watch dist --ext js --exec \"node ./scripts/copy-manifest.js\"",
     "watch": "yarn watch:build & yarn watch:manifest",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "api": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
   },
   "devDependencies": {
     "typescript": "^5.0.0",

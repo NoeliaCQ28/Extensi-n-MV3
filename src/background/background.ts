@@ -8,7 +8,7 @@ chrome.runtime.onInstalled.addListener(() => {
 // Listen for scraped data from content scripts and forward to external API
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message?.type === 'scrapedData') {
-    const url = 'http://localhost:3000/data'
+    const url = 'http://localhost:3001/data'
     const payload = message.data
     console.log('Background received scraped data from', sender?.tab?.id || 'unknown', 'items:', Array.isArray(payload) ? payload.length : 0)
 

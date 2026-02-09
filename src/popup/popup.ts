@@ -236,6 +236,323 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#39;')
 }
 
+type SiteKey = 'falabella' | 'mercadolibre'
+
+interface ProductoLite {
+  site: SiteKey
+  titulo?: string | null
+  precioNumerico?: number | null
+  marca?: string | null
+  vendedor?: string | null
+  url?: string | null
+}
+
+interface GroupBucket {
+  id: number
+  title: string
+  tokens: Set<string>
+  brandKey: string | null
+  items: ProductoLite[]
+}
+
+interface PriceStats {
+  count: number
+  min: number | null
+  max: number | null
+  avg: number | null
+  median: number | null
+}
+
+interface GroupStats {
+  id: number
+  title: string
+  total: number
+  bySite: Record<SiteKey, { count: number; prices: number[] }>
+  priceStats: PriceStats
+  comparison: {
+    falabellaMin: number | null
+    mercadolibreMin: number | null
+    cheaperSite: SiteKey | null
+    savings: number | null
+  }
+}
+
+const SITE_LABELS: Record<SiteKey, string> = {
+  falabella: 'Falabella',
+  mercadolibre: 'MercadoLibre'
+}
+
+const STOP_WORDS = new Set([
+  'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'y', 'o', 'con',
+  'sin', 'para', 'por', 'en', 'del', 'al', 'pack', 'set', 'combo', 'kit', 'x',
+  'nuevo', 'nueva', 'oferta', 'promocion', 'gratis'
+])
+
+const SIMILARITY_THRESHOLD = 0.58
+
+function normalizeText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function tokenize(value: string) {
+  if (!value) return []
+  return normalizeText(value)
+    .split(' ')
+    .filter(token => token && token.length > 1 && !STOP_WORDS.has(token))
+}
+
+function buildTokenSet(item: ProductoLite) {
+  const title = item.titulo || ''
+  const brand = item.marca || item.vendedor || ''
+  const tokens = tokenize(`${title} ${brand}`)
+  return new Set(tokens)
+}
+
+function getBrandKey(item: ProductoLite) {
+  const raw = item.marca || item.vendedor || ''
+  const normalized = normalizeText(raw)
+  return normalized || null
+}
+
+function computeSimilarity(a: Set<string>, b: Set<string>, brandMatch: boolean) {
+  if (a.size === 0 || b.size === 0) return 0
+  let intersection = 0
+  for (const token of a) {
+    if (b.has(token)) intersection++
+  }
+  const union = a.size + b.size - intersection
+  const jaccard = union > 0 ? intersection / union : 0
+  const coverage = intersection / Math.min(a.size, b.size)
+  let score = 0.6 * jaccard + 0.4 * coverage
+  if (brandMatch) score += 0.08
+  return Math.min(1, score)
+}
+
+function groupProducts(products: ProductoLite[]) {
+  const groups: GroupBucket[] = []
+  let nextId = 1
+  let emptyGroup: GroupBucket | null = null
+
+  for (const item of products) {
+    const tokens = buildTokenSet(item)
+    const brandKey = getBrandKey(item)
+
+    if (tokens.size === 0) {
+      if (!emptyGroup) {
+        emptyGroup = {
+          id: nextId++,
+          title: 'Sin titulo',
+          tokens: new Set(),
+          brandKey: null,
+          items: []
+        }
+        groups.push(emptyGroup)
+      }
+      emptyGroup.items.push(item)
+      continue
+    }
+
+    let bestGroup: GroupBucket | null = null
+    let bestScore = 0
+
+    for (const group of groups) {
+      if (group.tokens.size === 0) continue
+      const brandMatch = Boolean(brandKey && group.brandKey && brandKey === group.brandKey)
+      const score = computeSimilarity(tokens, group.tokens, brandMatch)
+      if (score > bestScore) {
+        bestScore = score
+        bestGroup = group
+      }
+    }
+
+    if (bestGroup && bestScore >= SIMILARITY_THRESHOLD) {
+      bestGroup.items.push(item)
+      if (tokens.size > bestGroup.tokens.size) {
+        bestGroup.tokens = tokens
+        if (item.titulo) bestGroup.title = item.titulo
+      }
+      if (!bestGroup.brandKey && brandKey) bestGroup.brandKey = brandKey
+    } else {
+      groups.push({
+        id: nextId++,
+        title: item.titulo || 'Sin titulo',
+        tokens,
+        brandKey,
+        items: [item]
+      })
+    }
+  }
+
+  return groups
+}
+
+function computePriceStats(prices: number[]): PriceStats {
+  if (!prices || prices.length === 0) {
+    return { count: 0, min: null, max: null, avg: null, median: null }
+  }
+
+  const sorted = [...prices].sort((a, b) => a - b)
+  const count = sorted.length
+  const min = sorted[0]
+  const max = sorted[sorted.length - 1]
+  const avg = sorted.reduce((sum, value) => sum + value, 0) / count
+  const mid = Math.floor(count / 2)
+  const median = count % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+  return { count, min, max, avg, median }
+}
+
+function formatPrice(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return '—'
+  return `S/ ${value.toLocaleString('es-PE', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
+}
+
+function buildGroupStats(groups: GroupBucket[]): GroupStats[] {
+  return groups.map(group => {
+    const bySite: Record<SiteKey, { count: number; prices: number[] }> = {
+      falabella: { count: 0, prices: [] },
+      mercadolibre: { count: 0, prices: [] }
+    }
+
+    for (const item of group.items) {
+      const site = item.site
+      bySite[site].count += 1
+      if (Number.isFinite(item.precioNumerico)) {
+        bySite[site].prices.push(item.precioNumerico as number)
+      }
+    }
+
+    const allPrices = [...bySite.falabella.prices, ...bySite.mercadolibre.prices]
+    const priceStats = computePriceStats(allPrices)
+
+    const falMin = bySite.falabella.prices.length > 0 ? Math.min(...bySite.falabella.prices) : null
+    const merMin = bySite.mercadolibre.prices.length > 0 ? Math.min(...bySite.mercadolibre.prices) : null
+    let cheaperSite: SiteKey | null = null
+    let savings: number | null = null
+
+    if (falMin !== null && merMin !== null) {
+      if (falMin <= merMin) {
+        cheaperSite = 'falabella'
+        savings = merMin - falMin
+      } else {
+        cheaperSite = 'mercadolibre'
+        savings = falMin - merMin
+      }
+    }
+
+    return {
+      id: group.id,
+      title: group.title,
+      total: group.items.length,
+      bySite,
+      priceStats,
+      comparison: {
+        falabellaMin: falMin,
+        mercadolibreMin: merMin,
+        cheaperSite,
+        savings
+      }
+    }
+  })
+}
+
+function buildStatsHtml(keyword: string, groupStats: GroupStats[]) {
+  const totalProducts = groupStats.reduce((sum, g) => sum + g.total, 0)
+  const groupsWithBothSites = groupStats.filter(g => g.bySite.falabella.count > 0 && g.bySite.mercadolibre.count > 0)
+  const ranking = [...groupsWithBothSites]
+    .filter(g => (g.comparison.savings || 0) > 0)
+    .sort((a, b) => (b.comparison.savings || 0) - (a.comparison.savings || 0))
+    .slice(0, 8)
+
+  const rankingHtml = ranking.length
+    ? ranking.map((g, index) => {
+      const cheaper = g.comparison.cheaperSite ? SITE_LABELS[g.comparison.cheaperSite] : '—'
+      return `
+        <div class="flex items-center justify-between text-sm">
+          <div class="truncate">${index + 1}. ${escapeHtml(g.title || 'Sin titulo')}</div>
+          <div class="ml-2 whitespace-nowrap text-green-700">Ahorro: ${formatPrice(g.comparison.savings)} (${cheaper})</div>
+        </div>
+      `
+    }).join('')
+    : '<div class="text-xs text-gray-500">No hay grupos con precios en ambos sitios.</div>'
+
+  const groupsHtml = groupStats
+    .map(g => {
+      const priceStats = g.priceStats
+      const cheaperSite = g.comparison.cheaperSite ? SITE_LABELS[g.comparison.cheaperSite] : '—'
+      const comparisonText = (g.comparison.falabellaMin !== null && g.comparison.mercadolibreMin !== null)
+        ? `Falabella: ${formatPrice(g.comparison.falabellaMin)} | MercadoLibre: ${formatPrice(g.comparison.mercadolibreMin)} | Mejor: ${cheaperSite}`
+        : 'Comparacion no disponible (precio faltante)'
+
+      const savingsText = g.comparison.savings ? `Ahorro estimado: ${formatPrice(g.comparison.savings)}` : 'Ahorro estimado: —'
+
+      return `
+        <div class="border border-gray-100 rounded p-3">
+          <div class="text-sm font-semibold text-gray-900 truncate">${escapeHtml(g.title || 'Sin titulo')}</div>
+          <div class="mt-1 text-xs text-gray-500">Total: ${g.total} | ${SITE_LABELS.falabella}: ${g.bySite.falabella.count} | ${SITE_LABELS.mercadolibre}: ${g.bySite.mercadolibre.count}</div>
+          <div class="mt-2 text-xs text-gray-600">Precio min: ${formatPrice(priceStats.min)} | max: ${formatPrice(priceStats.max)} | promedio: ${formatPrice(priceStats.avg)} | mediana: ${formatPrice(priceStats.median)}</div>
+          <div class="mt-1 text-xs text-gray-600">${comparisonText}</div>
+          <div class="mt-1 text-xs text-green-700">${savingsText}</div>
+        </div>
+      `
+    })
+    .join('')
+
+  return `
+    <div class="space-y-3">
+      <div class="bg-white rounded shadow p-3">
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <div class="text-sm font-semibold text-gray-900">Estadisticas para: ${escapeHtml(keyword)}</div>
+            <div class="text-xs text-gray-500">Productos: ${totalProducts} | Grupos: ${groupStats.length} | Con ambos sitios: ${groupsWithBothSites.length}</div>
+          </div>
+          <button id="backToListBtn" class="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200">Volver</button>
+        </div>
+      </div>
+
+      <div class="bg-white rounded shadow p-3">
+        <div class="text-xs font-semibold text-gray-900 mb-2">Ranking de ahorro</div>
+        <div class="space-y-1">${rankingHtml}</div>
+      </div>
+
+      <div class="bg-white rounded shadow p-3">
+        <div class="text-xs font-semibold text-gray-900 mb-2">Grupos similares</div>
+        <div class="space-y-2 max-h-72 overflow-auto">${groupsHtml}</div>
+      </div>
+    </div>
+  `
+}
+
+async function showStatsForKeyword(keyword: string) {
+  const resultEl = document.getElementById('result')
+  if (!resultEl) return
+  const resultKey = buildResultsKey(keyword)
+  const stored = await chrome.storage.local.get(resultKey)
+  const products = Array.isArray(stored?.[resultKey]) ? stored[resultKey] : []
+
+  if (!products || products.length === 0) {
+    resultEl.innerHTML = `<div class="p-4 bg-white rounded shadow text-gray-600">No hay productos guardados para ${escapeHtml(keyword)}.</div>`
+    return
+  }
+
+  todosLosProductos = products
+  paginaActual = 1
+
+  const groups = groupProducts(products as ProductoLite[])
+  const stats = buildGroupStats(groups)
+  resultEl.innerHTML = buildStatsHtml(keyword, stats)
+
+  const backBtn = document.getElementById('backToListBtn')
+  backBtn?.addEventListener('click', () => {
+    actualizarVista()
+  })
+}
+
 async function loadKeywords() {
   const result = await chrome.storage.local.get(KEYWORDS_STORAGE_KEY)
   const stored = result?.[KEYWORDS_STORAGE_KEY]
@@ -829,6 +1146,7 @@ async function init() {
     }
 
     if (action === 'stats') {
+      await showStatsForKeyword(keyword)
       return
     }
 
