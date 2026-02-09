@@ -203,19 +203,15 @@ const wait = async (ms: number) => {
 
 async function scrapeIterativoMercadoLibre(port: chrome.runtime.Port, keyword?: string) {
   checkCancelled()
-  const maxItems = 100 
-  const maxPages = 15
   const all: any[] = []
 
-  for (let page = 0; page < maxPages; page++) {
+  while (true) {
     checkCancelled()
     const pageProducts = await scrapearProductosMercadoLibre(keyword)
     const base = all.length
     const normalized = pageProducts.map((p: any, idx: number) => ({ ...p, posicion: base + idx + 1 }))
     all.push(...normalized)
     port.postMessage({ type: 'progress', count: all.length })
-
-    if (all.length >= maxItems) break
 
     const hasNext = clickSiguientePaginaMercadoLibre()
     if (!hasNext) break
