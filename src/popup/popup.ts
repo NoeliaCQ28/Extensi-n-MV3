@@ -419,15 +419,32 @@ async function init() {
     
     // Restaurar variables
     let allScrapedProducts = state.accumulatedProducts || []
+    let progressStreaming = false
     let currentPageNum = state.currentPage
     
     // Continuar con el scraping desde donde se quedó
     const handleMessage = async (response: any) => {
       if (response?.type === 'progress') {
+        const items = Array.isArray(response.items) ? response.items : null
+        if (items && items.length > 0) {
+          allScrapedProducts.push(...items)
+          progressStreaming = true
+        }
         const count = Number(response.count) || 0
         const total = response.total || undefined
         const page = response.page || undefined
-        updateProgress(allScrapedProducts.length + count, total, page)
+        const nextCount = items ? allScrapedProducts.length : allScrapedProducts.length + count
+        updateProgress(nextCount, total, page)
+        await saveScrapeState({
+          isRunning: true,
+          isPaused: scrapePausado,
+          keyword: state.keyword,
+          site: state.site,
+          currentPage: currentPageNum,
+          totalPages: state.totalPages,
+          productsCount: nextCount,
+          accumulatedProducts: allScrapedProducts
+        })
         return
       }
 
@@ -458,7 +475,9 @@ async function init() {
       }
 
       const pageProducts = response.result || []
-      allScrapedProducts.push(...pageProducts)
+      if (!progressStreaming || allScrapedProducts.length === 0) {
+        allScrapedProducts.push(...pageProducts)
+      }
       console.log(`Página ${currentPageNum}: ${pageProducts.length} productos. Total acumulado: ${allScrapedProducts.length}`)
       
       const total = response.total || undefined
@@ -631,6 +650,7 @@ async function init() {
     scrapeEnProgreso = true
     
     let allScrapedProducts: any[] = []
+    let progressStreaming = false
     let currentPageNum = 1
     
     const handleResult = async (message: any) => {
@@ -825,14 +845,31 @@ async function init() {
     
     let allScrapedProducts: any[] = []
     let currentPageNum = 1
+    let progressStreaming = false
 
     const handleMessage = async (response: any) => {
       // Manejar progreso en tiempo real
       if (response?.type === 'progress') {
+        const items = Array.isArray(response.items) ? response.items : null
+        if (items && items.length > 0) {
+          allScrapedProducts.push(...items)
+          progressStreaming = true
+        }
         const count = Number(response.count) || 0
         const total = response.total || undefined
         const page = response.page || undefined
-        updateProgress(allScrapedProducts.length + count, total, page)
+        const nextCount = items ? allScrapedProducts.length : allScrapedProducts.length + count
+        updateProgress(nextCount, total, page)
+        await saveScrapeState({
+          isRunning: true,
+          isPaused: scrapePausado,
+          keyword: 'scrape_manual',
+          site,
+          currentPage: currentPageNum,
+          totalPages: response.totalPages || 150,
+          productsCount: nextCount,
+          accumulatedProducts: allScrapedProducts
+        })
         return
       }
 
@@ -877,7 +914,9 @@ async function init() {
       }
 
       // Acumular productos
-      allScrapedProducts.push(...pageProducts)
+      if (!progressStreaming || allScrapedProducts.length === 0) {
+        allScrapedProducts.push(...pageProducts)
+      }
       console.log(`Página ${currentPageNum}: ${pageProducts.length} productos. Total acumulado: ${allScrapedProducts.length}`)
       
       // Actualizar progress con el total acumulado

@@ -211,7 +211,7 @@ async function scrapeIterativoMercadoLibre(port: chrome.runtime.Port, keyword?: 
     const base = all.length
     const normalized = pageProducts.map((p: any, idx: number) => ({ ...p, posicion: base + idx + 1 }))
     all.push(...normalized)
-    port.postMessage({ type: 'progress', count: all.length })
+    port.postMessage({ type: 'progress', count: all.length, items: normalized })
 
     const hasNext = clickSiguientePaginaMercadoLibre()
     if (!hasNext) break
