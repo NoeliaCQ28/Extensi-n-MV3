@@ -1,5 +1,12 @@
 // Content script for MercadoLibre: scraper and pagination handler
 
+const MERCADOLIBRE_INJECTED_FLAG = '__krowdy_mercadolibre_injected__'
+
+if ((globalThis as any)[MERCADOLIBRE_INJECTED_FLAG]) {
+  console.debug('MercadoLibre content script already injected')
+} else {
+  ;(globalThis as any)[MERCADOLIBRE_INJECTED_FLAG] = true
+
 console.log('MercadoLibre content script injected')
 
 interface Producto {
@@ -22,7 +29,7 @@ const parsePriceNumber = (value?: string) => {
   return Number.isFinite(numeric) ? numeric : null
 }
 
-const scrapearProductosMercadoLibre = (): Producto[] => {
+const scrapearProductosMercadoLibre = (keywordOverride?: string): Producto[] => {
   // Intentar diferentes selectores para mayor compatibilidad
   const selectors = [
     '.ui-search-result__wrapper',
@@ -45,7 +52,7 @@ const scrapearProductosMercadoLibre = (): Producto[] => {
     return []
   }
   
-  const keyword = (document.querySelector('#cb1-edit') as HTMLInputElement | null)?.value?.trim() || 'mercadolibre'
+  const keyword = keywordOverride || (document.querySelector('#cb1-edit') as HTMLInputElement | null)?.value?.trim() || 'mercadolibre'
   const timestamp = Date.now()
   const datos = Array.from(nodeList)
   const productos = datos.map((producto: Element, index: number) => {
@@ -167,37 +174,40 @@ const clickSiguientePaginaMercadoLibre = (): boolean => {
   }
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('MercadoLibre: Mensaje recibido', message)
-  
-  if (message?.type === 'scrape') {
-    try {
-      const productos = scrapearProductosMercadoLibre()
-      console.log('MercadoLibre: Enviando respuesta con', productos.length, 'productos')
-      sendResponse({ result: productos })
+chrome.runtime.onConnect.addListener((port) => {
+  console.log('MercadoLibre: Puerto conectado')
+  port.postMessage({ type: 'connection_established' })
 
-      // Enviar datos al background
+  port.onMessage.addListener((message) => {
+    console.log('MercadoLibre: Mensaje recibido', message)
+
+    if (message?.type === 'scrape') {
       try {
-        chrome.runtime.sendMessage({ type: 'scrapedData', data: productos }, (resp) => {
-        })
-      } catch (err) {
-        console.warn('No se pudo enviar datos al background', err)
-      }
-    } catch (err) {
-      console.error('MercadoLibre scrape error', err)
-      sendResponse({ error: String(err) })
-    }
-    return true
-  }
+        const productos = scrapearProductosMercadoLibre(typeof message.keyword === 'string' ? message.keyword : undefined)
+        console.log('MercadoLibre: Enviando respuesta con', productos.length, 'productos')
+        port.postMessage({ type: 'scrape_result', result: productos })
 
-  if (message?.type === 'nextPage') {
-    try {
-      const success = clickSiguientePaginaMercadoLibre()
-      sendResponse({ success })
-    } catch (err) {
-      console.error('Error en nextPage:', err)
-      sendResponse({ success: false, error: String(err) })
+        try {
+          chrome.runtime.sendMessage({ type: 'scrapedData', data: productos }, () => {
+          })
+        } catch (err) {
+          console.warn('No se pudo enviar datos al background', err)
+        }
+      } catch (err) {
+        console.error('MercadoLibre scrape error', err)
+        port.postMessage({ type: 'scrape_result', error: String(err) })
+      }
     }
-    return true
-  }
+
+    if (message?.type === 'nextPage') {
+      try {
+        const success = clickSiguientePaginaMercadoLibre()
+        port.postMessage({ type: 'nextPage_result', success })
+      } catch (err) {
+        console.error('Error en nextPage:', err)
+        port.postMessage({ type: 'nextPage_result', success: false, error: String(err) })
+      }
+    }
+  })
 })
+}

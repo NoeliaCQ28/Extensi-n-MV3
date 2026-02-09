@@ -1,5 +1,12 @@
 // Content script for Falabella: scrape product items and respond to messages from the extension
 
+const FALABELLA_INJECTED_FLAG = '__krowdy_falabella_injected__'
+
+if ((globalThis as any)[FALABELLA_INJECTED_FLAG]) {
+  console.debug('Falabella content script already injected')
+} else {
+  ;(globalThis as any)[FALABELLA_INJECTED_FLAG] = true
+
 console.log('Falabella content script injected')
 
 const parsePriceNumber = (value?: string) => {
@@ -9,17 +16,17 @@ const parsePriceNumber = (value?: string) => {
   return Number.isFinite(numeric) ? numeric : null
 }
 
-const scrapearProductosFalabella = () => {
-  const nodeList = document.querySelectorAll('[data-testid=ssr-pod]')
+const scrapearProductosFalabella = (keywordOverride?: string) => {
+  const nodeList = document.querySelectorAll('[data-testid=ssr-pod], a[data-pod="catalyst-pod"]')
   
   if (nodeList.length === 0) {
-    console.warn('Falabella: No se encontraron productos con el selector [data-testid=ssr-pod]')
+    console.warn('Falabella: No se encontraron productos con los selectores [data-testid=ssr-pod] o a[data-pod="catalyst-pod"]')
     return []
   }
   
   console.log(`Falabella: Encontrados ${nodeList.length} productos`)
   
-  const keyword = document.querySelector('h1')?.textContent?.trim() || 'falabella'
+  const keyword = keywordOverride || document.querySelector('h1')?.textContent?.trim() || 'falabella'
   const timestamp = Date.now()
   const datos = Array.from(nodeList)
   const productos = datos.map((producto: Element, index: number) => {
@@ -68,41 +75,40 @@ const clickSiguientePaginaFalabella = (): boolean => {
   }
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('Falabella: Mensaje recibido', message)
-  
-  if (message?.type === 'scrape') {
-    try {
-      const productos = scrapearProductosFalabella()
-      console.log('Falabella: Enviando respuesta con', productos.length, 'productos')
+chrome.runtime.onConnect.addListener((port) => {
+  console.log('Falabella: Puerto conectado')
+  port.postMessage({ type: 'connection_established' })
 
-      // Reply to the popup (synchronous response)
-      sendResponse({ result: productos })
+  port.onMessage.addListener((message) => {
+    console.log('Falabella: Mensaje recibido', message)
 
-      // Also forward the scraped data to the background service worker for forwarding to external API
+    if (message?.type === 'scrape') {
       try {
-        chrome.runtime.sendMessage({ type: 'scrapedData', data: productos }, (resp) => {
-          // optional ack handling
-          // console.log('Background ack:', resp)
-        })
-      } catch (err) {
-        console.warn('Could not send scraped data to background', err)
-      }
-    } catch (err) {
-      console.error('Falabella scrape error', err)
-      sendResponse({ error: String(err) })
-    }
-    return true
-  }
+        const productos = scrapearProductosFalabella(typeof message.keyword === 'string' ? message.keyword : undefined)
+        console.log('Falabella: Enviando respuesta con', productos.length, 'productos')
+        port.postMessage({ type: 'scrape_result', result: productos })
 
-  if (message?.type === 'nextPage') {
-    try {
-      const success = clickSiguientePaginaFalabella()
-      sendResponse({ success })
-    } catch (err) {
-      console.error('Error en nextPage:', err)
-      sendResponse({ success: false, error: String(err) })
+        try {
+          chrome.runtime.sendMessage({ type: 'scrapedData', data: productos }, () => {
+          })
+        } catch (err) {
+          console.warn('Could not send scraped data to background', err)
+        }
+      } catch (err) {
+        console.error('Falabella scrape error', err)
+        port.postMessage({ type: 'scrape_result', error: String(err) })
+      }
     }
-    return true
-  }
+
+    if (message?.type === 'nextPage') {
+      try {
+        const success = clickSiguientePaginaFalabella()
+        port.postMessage({ type: 'nextPage_result', success })
+      } catch (err) {
+        console.error('Error en nextPage:', err)
+        port.postMessage({ type: 'nextPage_result', success: false, error: String(err) })
+      }
+    }
+  })
 })
+}
