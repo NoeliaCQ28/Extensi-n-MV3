@@ -317,6 +317,14 @@ function actualizarVista() {
   showResults(resultEl, todosLosProductos, paginaActual)
 }
 
+function refreshResultsPreview(products: any[]) {
+  if (!products || products.length === 0) return
+  todosLosProductos = products
+  const totalPages = Math.max(1, Math.ceil(todosLosProductos.length / ITEMS_PER_PAGE))
+  if (paginaActual > totalPages) paginaActual = totalPages
+  actualizarVista()
+}
+
 async function tryInjectContentScript(tabId: number, url: string) {
   try {
     // Determinar qué script inyectar según la URL
@@ -429,6 +437,7 @@ async function init() {
         if (items && items.length > 0) {
           allScrapedProducts.push(...items)
           progressStreaming = true
+          refreshResultsPreview(allScrapedProducts)
         }
         const count = Number(response.count) || 0
         const total = response.total || undefined
@@ -482,6 +491,7 @@ async function init() {
       
       const total = response.total || undefined
       updateProgress(allScrapedProducts.length, total, currentPageNum)
+      refreshResultsPreview(allScrapedProducts)
       
       await saveScrapeState({
         isRunning: true,
@@ -655,11 +665,18 @@ async function init() {
     
     const handleResult = async (message: any) => {
       if (message?.type === 'progress') {
+        const items = Array.isArray(message.items) ? message.items : null
+        if (items && items.length > 0) {
+          allScrapedProducts.push(...items)
+          progressStreaming = true
+          refreshResultsPreview(allScrapedProducts)
+        }
         const count = Number(message.count) || 0
         const total = message.total || undefined
         const page = message.page || undefined
-        await updateKeywordData(keyword, 'Running', allScrapedProducts.length + count)
-        updateProgress(allScrapedProducts.length + count, total, page)
+        const nextCount = items ? allScrapedProducts.length : allScrapedProducts.length + count
+        await updateKeywordData(keyword, 'Running', nextCount)
+        updateProgress(nextCount, total, page)
         return
       }
       if (message?.type === 'scrape_cancelled') {
@@ -691,7 +708,9 @@ async function init() {
       }
 
       const pageProducts = Array.isArray(message.result) ? message.result : []
-      allScrapedProducts.push(...pageProducts)
+      if (!progressStreaming || allScrapedProducts.length === 0) {
+        allScrapedProducts.push(...pageProducts)
+      }
       
       console.log(`Página ${currentPageNum}: ${pageProducts.length} productos. Total acumulado: ${allScrapedProducts.length}`)
       
@@ -699,6 +718,7 @@ async function init() {
       const total = message.total || undefined
       await updateKeywordData(keyword, 'Running', allScrapedProducts.length)
       updateProgress(allScrapedProducts.length, total, currentPageNum)
+      refreshResultsPreview(allScrapedProducts)
       
       // Guardar estado del scraping
       await saveScrapeState({
@@ -854,6 +874,7 @@ async function init() {
         if (items && items.length > 0) {
           allScrapedProducts.push(...items)
           progressStreaming = true
+          refreshResultsPreview(allScrapedProducts)
         }
         const count = Number(response.count) || 0
         const total = response.total || undefined
@@ -922,6 +943,7 @@ async function init() {
       // Actualizar progress con el total acumulado
       const total = response.total || undefined
       updateProgress(allScrapedProducts.length, total, currentPageNum)
+      refreshResultsPreview(allScrapedProducts)
       
       // Guardar estado del scraping
       await saveScrapeState({
