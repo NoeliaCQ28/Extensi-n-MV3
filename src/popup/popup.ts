@@ -273,6 +273,10 @@ async function init() {
     if (!port) return
 
     const handleResult = async (message: any) => {
+      if (message?.type === 'progress') {
+        await updateKeywordData(keyword, 'Running', Number(message.count) || 0)
+        return
+      }
       if (message?.type !== 'scrape_result') return
       port.onMessage.removeListener(handleResult)
 

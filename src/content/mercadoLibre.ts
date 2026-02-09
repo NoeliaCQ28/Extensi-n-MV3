@@ -174,16 +174,41 @@ const clickSiguientePaginaMercadoLibre = (): boolean => {
   }
 }
 
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+async function scrapeIterativoMercadoLibre(port: chrome.runtime.Port, keyword?: string) {
+  const maxItems = 100 
+  const maxPages = 15
+  const all: any[] = []
+
+  for (let page = 0; page < maxPages; page++) {
+    const pageProducts = scrapearProductosMercadoLibre(keyword)
+    const base = all.length
+    const normalized = pageProducts.map((p: any, idx: number) => ({ ...p, posicion: base + idx + 1 }))
+    all.push(...normalized)
+    port.postMessage({ type: 'progress', count: all.length })
+
+    if (all.length >= maxItems) break
+
+    const hasNext = clickSiguientePaginaMercadoLibre()
+    if (!hasNext) break
+
+    await wait(1800)
+  }
+
+  return all.slice(0, maxItems)
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   console.log('MercadoLibre: Puerto conectado')
   port.postMessage({ type: 'connection_established' })
 
-  port.onMessage.addListener((message) => {
+  port.onMessage.addListener(async (message) => {
     console.log('MercadoLibre: Mensaje recibido', message)
 
     if (message?.type === 'scrape') {
       try {
-        const productos = scrapearProductosMercadoLibre(typeof message.keyword === 'string' ? message.keyword : undefined)
+        const productos = await scrapeIterativoMercadoLibre(port, typeof message.keyword === 'string' ? message.keyword : undefined)
         console.log('MercadoLibre: Enviando respuesta con', productos.length, 'productos')
         port.postMessage({ type: 'scrape_result', result: productos })
 

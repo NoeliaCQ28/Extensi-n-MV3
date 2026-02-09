@@ -75,16 +75,41 @@ const clickSiguientePaginaFalabella = (): boolean => {
   }
 }
 
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+async function scrapeIterativoFalabella(port: chrome.runtime.Port, keyword?: string) {
+  const maxItems = 60 
+  const maxPages = 10
+  const all: any[] = []
+
+  for (let page = 0; page < maxPages; page++) {
+    const pageProducts = scrapearProductosFalabella(keyword)
+    const base = all.length
+    const normalized = pageProducts.map((p: any, idx: number) => ({ ...p, posicion: base + idx + 1 }))
+    all.push(...normalized)
+    port.postMessage({ type: 'progress', count: all.length })
+
+    if (all.length >= maxItems) break
+
+    const hasNext = clickSiguientePaginaFalabella()
+    if (!hasNext) break
+
+    await wait(1800)
+  }
+
+  return all.slice(0, maxItems)
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   console.log('Falabella: Puerto conectado')
   port.postMessage({ type: 'connection_established' })
 
-  port.onMessage.addListener((message) => {
+  port.onMessage.addListener(async (message) => {
     console.log('Falabella: Mensaje recibido', message)
 
     if (message?.type === 'scrape') {
       try {
-        const productos = scrapearProductosFalabella(typeof message.keyword === 'string' ? message.keyword : undefined)
+        const productos = await scrapeIterativoFalabella(port, typeof message.keyword === 'string' ? message.keyword : undefined)
         console.log('Falabella: Enviando respuesta con', productos.length, 'productos')
         port.postMessage({ type: 'scrape_result', result: productos })
 
