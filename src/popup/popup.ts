@@ -7,7 +7,15 @@ const addKeywordButtonElement = document.getElementById('addKeywordBtn') as HTML
 const keywordListElement = document.getElementById('keywordList') as HTMLDivElement | null
 
 const KEYWORDS_STORAGE_KEY = 'keywords'
-let keywords: string[] = []
+type KeywordStatus = 'Idle' | 'Running' | 'Done' | 'Error' | 'Cancelled'
+
+interface KeywordData {
+  term: string
+  status: KeywordStatus
+  count: number
+}
+
+let keywords: KeywordData[] = []
 
 let todosLosProductos: any[] = []
 let paginaActual: number = 1
@@ -28,7 +36,21 @@ function escapeHtml(value: string) {
 async function loadKeywords() {
   const result = await chrome.storage.local.get(KEYWORDS_STORAGE_KEY)
   const stored = result?.[KEYWORDS_STORAGE_KEY]
-  keywords = Array.isArray(stored) ? stored : []
+  if (Array.isArray(stored)) {
+    if (stored.length > 0 && typeof stored[0] === 'string') {
+      keywords = (stored as string[]).map(term => ({ term, status: 'Idle', count: 0 }))
+    } else {
+      keywords = (stored as KeywordData[])
+        .filter(item => item && typeof item.term === 'string')
+        .map(item => ({
+          term: item.term,
+          status: item.status || 'Idle',
+          count: typeof item.count === 'number' ? item.count : 0
+        }))
+    }
+  } else {
+    keywords = []
+  }
   renderKeywords()
 }
 
@@ -46,13 +68,18 @@ function renderKeywords() {
 
   keywordListElement.innerHTML = keywords
     .map((keyword) => {
-      const safe = escapeHtml(keyword)
+      const safe = escapeHtml(keyword.term)
+      const statusLabel = `${keyword.status.toUpperCase()} (${keyword.count})`
       return `
         <div class="flex items-center justify-between gap-2 p-2 border border-gray-100 rounded">
-          <div class="text-sm text-gray-800 truncate">${safe}</div>
+          <div class="min-w-0">
+            <div class="text-sm text-gray-800 truncate">${safe}</div>
+            <div class="text-xs text-gray-500">${statusLabel}</div>
+          </div>
           <div class="flex items-center gap-1">
             <button data-action="falabella" data-keyword="${safe}" class="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200">Falabella</button>
             <button data-action="mercadolibre" data-keyword="${safe}" class="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200">MercadoLibre</button>
+            <button data-action="stats" data-keyword="${safe}" class="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200">Estadísticas</button>
             <button data-action="delete" data-keyword="${safe}" class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded hover:bg-red-100">Eliminar</button>
           </div>
         </div>
@@ -107,9 +134,9 @@ async function init() {
   addKeywordButtonElement?.addEventListener('click', async () => {
     const value = normalizeKeyword(keywordInputElement?.value || '')
     if (!value) return
-    const exists = keywords.some(k => k.toLowerCase() === value.toLowerCase())
+    const exists = keywords.some(k => k.term.toLowerCase() === value.toLowerCase())
     if (exists) return
-    keywords = [value, ...keywords]
+    keywords = [{ term: value, status: 'Idle', count: 0 }, ...keywords]
     if (keywordInputElement) keywordInputElement.value = ''
     renderKeywords()
     await saveKeywords()
@@ -130,9 +157,13 @@ async function init() {
     if (!action || !keyword) return
 
     if (action === 'delete') {
-      keywords = keywords.filter(k => k.toLowerCase() !== keyword.toLowerCase())
+      keywords = keywords.filter(k => k.term.toLowerCase() !== keyword.toLowerCase())
       renderKeywords()
       await saveKeywords()
+      return
+    }
+
+    if (action === 'stats') {
       return
     }
 
