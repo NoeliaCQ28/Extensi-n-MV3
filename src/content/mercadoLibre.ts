@@ -196,7 +196,7 @@ async function scrapeIterativoMercadoLibre(port: chrome.runtime.Port, keyword?: 
     await wait(1800)
   }
 
-  return all.slice(0, maxItems)
+  return all
 }
 
 chrome.runtime.onConnect.addListener((port) => {

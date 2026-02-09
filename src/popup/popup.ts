@@ -52,11 +52,29 @@ async function loadKeywords() {
   } else {
     keywords = []
   }
+  await hydrateKeywordCounts()
   renderKeywords()
 }
 
 async function saveKeywords() {
   await chrome.storage.local.set({ [KEYWORDS_STORAGE_KEY]: keywords })
+}
+
+function buildResultsKey(term: string) {
+  return `results_${term.toUpperCase().replace(/\s+/g, '_')}`
+}
+
+async function hydrateKeywordCounts() {
+  if (keywords.length === 0) return
+  const keys = keywords.map(item => buildResultsKey(item.term))
+  const result = await chrome.storage.local.get(keys)
+  keywords = keywords.map((item, index) => {
+    const stored = result?.[keys[index]]
+    if (Array.isArray(stored)) {
+      return { ...item, count: stored.length }
+    }
+    return item
+  })
 }
 
 async function updateKeywordStatus(term: string, status: KeywordStatus) {
@@ -286,6 +304,8 @@ async function init() {
       }
 
       const result = Array.isArray(message.result) ? message.result : []
+      const resultKey = buildResultsKey(keyword)
+      await chrome.storage.local.set({ [resultKey]: result })
       await updateKeywordData(keyword, 'Done', result.length)
     }
 
